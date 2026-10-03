@@ -79,12 +79,16 @@ run: $(EXE) $(ICON)
 	$(EXE) $(if $(ROM),"$(ROM)")
 
 # Installs the app and registers it with Launch Services, so Finder opens
-# cartridges with the installed copy rather than the one in build/.
+# cartridges with the installed copy rather than the ones in build/. The
+# ad hoc signature covers the whole bundle, not only the linker-signed
+# executable.
 install: $(EXE) $(ICON)
 	rm -rf "$(INSTALL_DIR)/Sally.app"
 	ditto $(APP) "$(INSTALL_DIR)/Sally.app"
+	codesign --force --sign - "$(INSTALL_DIR)/Sally.app"
 	$(LSREGISTER) -f "$(INSTALL_DIR)/Sally.app"
-	-$(LSREGISTER) -u $(APP) 2>/dev/null
+	@$(LSREGISTER) -u $(APP) 2>/dev/null || true
+	@$(LSREGISTER) -u $(BUILD)/dmg/Sally.app 2>/dev/null || true
 
 uninstall:
 	-$(LSREGISTER) -u "$(INSTALL_DIR)/Sally.app" 2>/dev/null

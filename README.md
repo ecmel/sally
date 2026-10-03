@@ -116,10 +116,15 @@ frames emulated, missed refreshes, time per update and audio buffer level.
 
 - `make test`: cycle counts of all 256 opcodes against the NMOS table, and
   Klaus Dormann's functional test.
-- `build/sallyrun ROM SCRIPT`: runs a cartridge headless and saves
-  screenshots, with the same script commands as the retro-ports harness
-  (`stick`, `fire`, `consol`, `key`, `shot`), so its frames can be compared
-  with that harness's reference emulator.
+- `build/sallyrun [-l LABELS] ROM SCRIPT`: runs a cartridge headless and
+  saves screenshots, with the same script commands as the retro-ports
+  harness (`stick`, `fire`, `consol`, `key`, `shot`), so its frames can be
+  compared with that harness's reference emulator. It also helps debug a
+  cartridge: `regs`, `peek`, `poke`, breakpoints (`bp`), memory watches
+  (`watch`), a profile of CPU cycles by routine (`prof`), a log of the
+  sound registers (`pokeylog`) and a WAV of the sound (`wav`). With an ld65
+  or VICE label file (`-l`), addresses can be names and are printed as
+  `routine+offset`. The full list is at the top of `tools/sallyrun.c`.
 
 ## Not done yet
 
