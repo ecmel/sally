@@ -1,4 +1,4 @@
-# Builds a universal, signed and notarized Sally.dmg for every v* tag and
+# Builds a signed and notarized Apple silicon Sally.dmg for every v* tag and
 # attaches it to a GitHub release.
 #
 # Repository secrets:
@@ -21,6 +21,10 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    # Shared by every make step: make does not rebuild objects when flags
+    # change, so the tests must build the same objects as the app.
+    env:
+      ARCHS: arm64
     steps:
       - uses: actions/checkout@v5
 
@@ -50,7 +54,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: make notarize ARCHS="arm64 x86_64" VERSION="${GITHUB_REF_NAME#v}"
+        run: make notarize VERSION="${GITHUB_REF_NAME#v}"
 
       - name: Publish release
         env:

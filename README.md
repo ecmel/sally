@@ -24,6 +24,7 @@ make install                  # copy to /Applications (INSTALL_DIR=... for elsew
 universal app and `VERSION=1.2.3` to stamp the version. Pushing a `v*`
 tag runs the same build on GitHub Actions
 (`.github/workflows/release.yml`) and attaches the image to a release.
+Releases are built for Apple silicon only.
 
 Requires macOS 14 and the Xcode command line tools. Cartridges are plain
 8K or 16K images (`.rom`, `.bin`) or `.car` files of those types. The last
