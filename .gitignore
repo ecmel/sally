@@ -1,0 +1,9 @@
+build/
+roms/
+# Cartridge, disk and ROM images are copyrighted; keep them out of git.
+*.rom
+*.car
+*.bin
+*.xex
+*.atr
+.DS_Store

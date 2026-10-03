@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sally, an Atari 800 XL emulator for macOS</title>
+<meta name="description" content="Sally is an Atari 800 XL emulator for macOS with a cycle-exact 6502, mid-line ANTIC and GTIA timing, and frames that reach the screen evenly.">
+<meta property="og:title" content="Sally">
+<meta property="og:description" content="An Atari 800 XL emulator for macOS. Accurate where games can tell the difference, smooth where you can see it.">
+<meta property="og:image" content="icon.png">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<style>
+:root {
+  --sky-light: #b4e5ff;
+  --sky: #5aaeec;
+  --bg: #f7f9fb;
+  --surface: #ffffff;
+  --text: #1a1d21;
+  --muted: #5b6470;
+  --border: #e1e6ec;
+  --accent: #1f6fb8;
+  --code-bg: #f0f3f6;
+  --hero-text: #0d2a42;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --surface: #1a1e23;
+    --text: #e8ecf0;
+    --muted: #9aa4b0;
+    --border: #2a3038;
+    --accent: #7cc4f6;
+    --code-bg: #1f242a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+a { color: var(--accent); }
+
+.wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* Hero, in the icon's sky blue. */
+
+.hero {
+  background: linear-gradient(to bottom, var(--sky-light), var(--sky));
+  color: var(--hero-text);
+  text-align: center;
+  padding-top: 64px;
+}
+
+.hero-icon {
+  width: 192px;
+  height: auto;
+  filter: drop-shadow(0 12px 24px rgba(13, 42, 66, 0.25));
+}
+
+.hero h1 {
+  font-size: 64px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  margin: 8px 0 8px;
+}
+
+.tagline {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.lede {
+  max-width: 560px;
+  margin: 16px auto 0;
+  font-size: 18px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.button {
+  display: inline-block;
+  padding: 12px 24px;
+  border-radius: 999px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--hero-text);
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(13, 42, 66, 0.15);
+}
+
+.button:hover { background: rgba(255, 255, 255, 0.85); }
+
+.button.primary {
+  color: #fff;
+  background: #141414;
+  border-color: #141414;
+}
+
+.button.primary:hover { background: #333; }
+
+.fineprint {
+  font-size: 14px;
+  opacity: 0.75;
+  margin: 16px 0 0;
+  padding-bottom: 56px;
+}
+
+/* A stripe of the 800 XL's sixteen hues. */
+
+.palette {
+  height: 10px;
+  background: linear-gradient(to right,
+    #8a8a8a 0 6.25%, #a87a1c 0 12.5%, #c06a28 0 18.75%, #cc5c44 0 25%,
+    #c4527a 0 31.25%, #a8509c 0 37.5%, #7c58b4 0 43.75%, #5c64c4 0 50%,
+    #4878c8 0 56.25%, #3c8cc0 0 62.5%, #3c9ca0 0 68.75%, #3ca478 0 75%,
+    #50a850 0 81.25%, #78a83c 0 87.5%, #9c9c30 0 93.75%, #b48c28 0);
+}
+
+/* Sections. */
+
+main section.wrap { padding-top: 56px; }
+
+main section.wrap:last-child { padding-bottom: 64px; }
+
+h2 {
+  font-size: 30px;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+}
+
+.intro {
+  color: var(--muted);
+  max-width: 680px;
+  margin: 0 0 24px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.card h3 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 15px;
+}
+
+th, td {
+  text-align: left;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+tbody tr:last-child td { border-bottom: 0; }
+
+th {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+kbd, code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+pre {
+  margin: 0;
+  padding: 16px 20px;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 16px 0 0;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 14px;
+  padding: 24px 0;
+}
+
+footer p { margin: 4px 0; }
+
+@media (max-width: 600px) {
+  .hero { padding-top: 40px; }
+  .hero-icon { width: 144px; }
+  .hero h1 { font-size: 48px; }
+  .tagline { font-size: 20px; }
+  h2 { font-size: 26px; }
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img class="hero-icon" src="icon.png" width="256" height="256" alt="Sally app icon: an arcade joystick on sky blue">
+    <h1>Sally</h1>
+    <p class="tagline">An Atari 800 XL emulator for macOS.</p>
+    <p class="lede">Accurate where games can tell the difference, and smooth where you can see it: scrolling as even as on the real machine.</p>
+    <div class="actions">
+      <a class="button primary" href="https://github.com/ecmel/sally/releases/latest">Download for Mac</a>
+      <a class="button" href="https://github.com/ecmel/sally">View on GitHub</a>
+    </div>
+    <p class="fineprint">macOS 14 or later. Universal app.</p>
+  </div>
+  <div class="palette" aria-hidden="true"></div>
+</header>
+
+<main>
+
+<section class="wrap">
+  <h2>Named after the chip</h2>
+  <p class="intro">The 800 XL's CPU is a custom 6502C that Atari called "Sally". This emulator is written in C and Objective-C with nothing beyond the system frameworks: Cocoa, Metal, Core Audio and GameController.</p>
+
+  <div class="grid">
+    <article class="card">
+      <h3>Every bus cycle</h3>
+      <p>The 6502 models each cycle, dummy reads and writes included, plus the undocumented opcodes. Every access waits for a cycle ANTIC leaves free, so cycle stealing, WSYNC and interrupt timing fall out of the bus.</p>
+    </article>
+    <article class="card">
+      <h3>Mid-line changes land</h3>
+      <p>GTIA draws each line in segments up to the beam before any register write, so colors and positions changed in the middle of a line show up exactly where they should.</p>
+    </article>
+    <article class="card">
+      <h3>Even frames</h3>
+      <p>On a 60 or 120 Hz display, Atari frames lock to refreshes, so each one is on screen for the same time. Pixels are drawn at whole multiples, so nothing ripples while scrolling.</p>
+    </article>
+    <article class="card">
+      <h3>Event-driven sound</h3>
+      <p>POKEY's channels are integrated between divider events for each audio sample. The sample rate is nudged to keep the buffer level steady instead of drifting into dropouts.</p>
+    </article>
+    <article class="card">
+      <h3>Its own little OS</h3>
+      <p>A small built-in OS, written in 6502 assembly and assembled at startup, handles reset, interrupts and the vertical blank. No Atari ROMs needed to run cartridge games.</p>
+    </article>
+    <article class="card">
+      <h3>At home on the Mac</h3>
+      <p>Drop a cartridge on the window or double-click it in Finder. Game controllers work as joysticks, and the last cartridge comes back at the next launch.</p>
+    </article>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Controls</h2>
+  <p class="intro">The 800 XL's metal keys sit on Command and the digits, in the order they appear on the machine. Its plastic keys are on plain Mac keys.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Mac</th><th>Atari</th></tr></thead>
+      <tbody>
+        <tr><td>Arrow keys</td><td>Joystick</td></tr>
+        <tr><td><kbd>Option</kbd></td><td>Fire</td></tr>
+        <tr><td><kbd>Cmd-1</kbd> <kbd>Cmd-2</kbd> <kbd>Cmd-3</kbd></td><td>START, SELECT, OPTION (held)</td></tr>
+        <tr><td><kbd>Cmd-4</kbd></td><td>HELP (held)</td></tr>
+        <tr><td><kbd>Cmd-5</kbd> <kbd>Cmd-6</kbd></td><td>RESET, power cycle</td></tr>
+        <tr><td>The key left of 1</td><td>Inverse</td></tr>
+        <tr><td><kbd>fn-Delete</kbd></td><td>BREAK</td></tr>
+        <tr><td>Other keys</td><td>The Atari keyboard, by character</td></tr>
+        <tr><td>Game controller</td><td>Joystick (A, B or R2 fire)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note"><kbd>Cmd-P</kbd> pauses, <kbd>Cmd-0</kbd> fits the window to the picture, <kbd>Ctrl-Cmd-F</kbd> enters full screen.</p>
+</section>
+
+<section class="wrap">
+  <h2>Build from source</h2>
+  <p class="intro">You need macOS 14 and the Xcode command line tools.</p>
+<pre><code>git clone https://github.com/ecmel/sally.git
+cd sally
+make                           # build/Sally.app
+make run ROM=game.rom          # or drop a cartridge onto the window
+make test                      # CPU tests
+make install                   # copy to /Applications</code></pre>
+  <p class="note">Cartridges are plain 8K or 16K images (<code>.rom</code>, <code>.bin</code>) or <code>.car</code> files of those types. Sally does not ship with any games.</p>
+</section>
+
+<section class="wrap">
+  <h2>Not done yet</h2>
+  <p class="intro">Disk drives and SIO (no <code>.atr</code> or <code>.xex</code>), bank-switched cartridges, paddles, a way to load the BASIC ROM, and the finer GTIA quirks. Only NTSC is emulated.</p>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Sally is MIT licensed. Copyright &copy; 2026 Ecmel Ercan.</p>
+    <p>Atari and 800 XL are trademarks of their respective owners. Sally is not affiliated with Atari.</p>
+  </div>
+</footer>
+
+</body>
+</html>
