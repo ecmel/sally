@@ -174,6 +174,7 @@ static const char *const source =
     "        sta RAMTOP\n"
     "        lda #$FF\n"
     "        sta CH\n"
+    "        sta BRKKEY      ; BREAK not pressed\n"
     "        lda #$C0        ; keyboard and BREAK interrupts\n"
     "        sta POKMSK\n"
     "        sta IRQEN\n"
