@@ -27,8 +27,13 @@ tag runs the same build on GitHub Actions
 Releases are built for Apple silicon only.
 
 Requires macOS 14 and the Xcode command line tools. Cartridges are plain
-8K or 16K images (`.rom`, `.bin`) or `.car` files of those types. The last
+8K or 16K images (`.rom`, `.bin`) or `.car` files of those types, or of
+the bank-switched MegaCart (16K to 1M) and SIC! (128K to 512K). The last
 cartridge opened comes back at the next launch.
+
+The machine has 128K of RAM: the 800 XL's 64K and 64K more, banked into
+`$4000-$7FFF` through PORTB as on the 130XE, with separate CPU and ANTIC
+access. Games that need 128K, like the Prince of Persia port, run.
 
 `make install` registers the installed app with Launch Services, so Finder
 opens `.rom` and `.car` files in Sally and shows them with a Sally document
@@ -84,7 +89,8 @@ hot loop has no message sends) and the Mac frontend in Objective-C.
   audio sample. Also the timers and their interrupts, keyboard, RANDOM and
   enough serial output for the OS.
 - `machine.c`: the XL memory map (PORTB banking of the OS, BASIC and self
-  test ROMs), the PIA, cartridges and resets.
+  test ROMs and the 130XE's extra RAM), the PIA, cartridges with their
+  bank switching, and resets.
 - `os.c` and `asm6502.c`: the built-in OS, written in 6502 assembly and
   assembled at startup by a small two-pass assembler.
 
@@ -128,9 +134,10 @@ frames emulated, missed refreshes, time per update and audio buffer level.
 
 ## Not done yet
 
-Disk drives and SIO (no `.atr` or `.xex`), bank-switched cartridges,
-paddles, a way to load the BASIC ROM, and the finer GTIA quirks (player
-retriggering when HPOS changes mid-object). Only NTSC is emulated.
+Disk drives and SIO (no `.atr` or `.xex`), bank-switched cartridges
+other than MegaCart and SIC! (and flash writes on those), paddles, a way
+to load the BASIC ROM, and the finer GTIA quirks (player retriggering when
+HPOS changes mid-object). Only NTSC is emulated.
 
 ## License
 

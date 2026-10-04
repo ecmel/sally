@@ -1,5 +1,6 @@
 // Atari 800 XL: a 6502C ("Sally") with ANTIC, GTIA, POKEY and a PIA, 64K
-// of RAM, the OS ROM and an optional cartridge.
+// of RAM and 64K more banked as on the 130XE, the OS ROM and an optional
+// cartridge: standard 8K or 16K, MegaCart or SIC!.
 //
 // Time is counted in CPU cycles. A scanline is 114 cycles, an NTSC frame
 // 262 lines. ANTIC takes cycles from the CPU for its DMA; `dma` marks them
@@ -29,6 +30,9 @@ enum {
     LINE_CLOCKS = 228,
     AUDIO_MAX = 4096,
 };
+
+// Cartridge banking schemes.
+enum { CART_STANDARD, CART_MEGACART, CART_SIC };
 
 #define CPU_HZ 1789772.5
 
@@ -111,16 +115,22 @@ typedef struct Machine {
     uint64_t last_access;  // cycle of the CPU's last bus access
     bool irq;              // POKEY's IRQ line
 
-    // Memory. `rmap`/`wmap` point at each page; NULL is I/O.
+    // Memory. `rmap`/`wmap` point at each page; NULL is I/O. `amap` is
+    // ANTIC's view, which can differ from the CPU's at $4000-$7FFF.
     uint8_t *rmap[256];
     uint8_t *wmap[256];
+    uint8_t *amap[256];
     uint8_t sink[256];     // writes to ROM land here
     uint8_t ram[0x10000];
+    uint8_t xram[0x10000]; // the 130XE's four extra 16K banks
     uint8_t os[0x4000];    // $C000-$FFFF, self test at $D000-$D7FF
     uint8_t basic[0x2000];
     bool has_basic;
     uint8_t *cart;
     size_t cart_size;
+    int cart_type;         // CART_STANDARD, CART_MEGACART or CART_SIC
+    uint8_t cart_bank;     // the bank register, $D500
+    bool rd5;              // the cartridge shows at $A000-$BFFF
 
     Antic antic;
     Gtia gtia;
@@ -141,8 +151,8 @@ void machine_free(Machine *m);
 // `os` is a 16K XL OS ROM, or NULL for the built-in one.
 bool machine_set_os(Machine *m, const uint8_t *os, size_t size);
 void machine_set_basic(Machine *m, const uint8_t *basic, size_t size);
-// Loads a cartridge (raw 8K or 16K, or a .car file). Returns an error
-// message, or NULL.
+// Loads a cartridge: a raw 8K or 16K image, or a .car file of a standard,
+// MegaCart or SIC! cartridge. Returns an error message, or NULL.
 const char *machine_load_cart(Machine *m, const uint8_t *data, size_t size);
 void machine_eject_cart(Machine *m);
 void machine_cold_reset(Machine *m);
@@ -157,9 +167,9 @@ void machine_end_line(Machine *m);
 void machine_wait_wsync(Machine *m);
 uint8_t io_read(Machine *m, uint16_t addr);
 void io_write(Machine *m, uint16_t addr, uint8_t v);
-// ANTIC reads memory as the CPU sees it, without I/O.
+// ANTIC reads memory as it sees it, without I/O.
 static inline uint8_t antic_peek(const Machine *m, uint16_t addr) {
-    const uint8_t *p = m->rmap[addr >> 8];
+    const uint8_t *p = m->amap[addr >> 8];
     return p ? p[addr & 0xFF] : 0xFF;
 }
 

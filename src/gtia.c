@@ -287,7 +287,7 @@ uint8_t gtia_read(Machine *m, uint8_t reg) {
     case 0x10:
     case 0x11: return !trigger(m, reg - 0x10);
     case 0x12: return 1;
-    case 0x13: return m->cart != NULL;  // the XL reads cartridge presence here
+    case 0x13: return m->rd5;  // the XL reads cartridge presence here
     case 0x14: return 0x0F;  // PAL: an NTSC machine
     case 0x1F: return ~m->consol_keys & 0x07;  // the upper bits read as 0
     default: return 0x0F;
