@@ -134,6 +134,12 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     NSThread *_thread;
     CAMetalDisplayLink *_link;
     Pacer _pacer;
+    // Without display refreshes (the display asleep, the window hidden), a
+    // timer keeps the control socket and the machine running.
+    NSTimer *_timer;
+    Pacer _timerPacer;
+    double _lastRefresh;   // when the display link last called
+    id<NSObject> _activity;  // keeps App Nap off while the socket is open
 
     // Atari key presses waiting their turn (emulation thread only). Each
     // press is held for a few frames so programs that poll see it.
@@ -285,6 +291,9 @@ static int pacer_frames(Pacer *p, double t, double hz) {
         _link.preferredFrameLatency = 1;
         _link.preferredFrameRateRange = CAFrameRateRangeMake(60, 60, 60);
         [_link addToRunLoop:NSRunLoop.currentRunLoop forMode:NSRunLoopCommonModes];
+        _timer = [NSTimer timerWithTimeInterval:1.0 / 60 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
+        _timer.tolerance = 0;
+        [NSRunLoop.currentRunLoop addTimer:_timer forMode:NSRunLoopCommonModes];
     }
     for (;;) {
         @autoreleasepool {
@@ -311,6 +320,7 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     double hz = CPU_HZ / (LINES_PER_FRAME * CYCLES_PER_LINE);
     double t = update.targetPresentationTimestamp;
     double last = _pacer.last;
+    _lastRefresh = CACurrentMediaTime();
     int n = pacer_frames(&_pacer, t, hz);
     if (self.paused) n = 0;
 
@@ -335,6 +345,20 @@ static int pacer_frames(Pacer *p, double t, double hz) {
             _statEmuTime = 0;
         }
     }
+}
+
+// The timer: answers the control socket whatever the display does, and runs
+// the machine by the clock when the display link has stopped calling.
+- (void)tick:(NSTimer *)timer {
+    if (_control) control_poll(_control, control_line, (__bridge void *)self);
+    double now = CACurrentMediaTime();
+    if (now - _lastRefresh < 0.1) {
+        _timerPacer.last = 0;  // start afresh when it is needed again
+        return;
+    }
+    int n = pacer_frames(&_timerPacer, now, CPU_HZ / (LINES_PER_FRAME * CYCLES_PER_LINE));
+    if (self.paused) n = 0;
+    for (int i = 0; i < n; i++) [self runFrame];
 }
 
 - (void)feedKeys {
@@ -501,6 +525,12 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     if (!c) return @(err);
     control_close(_control);
     _control = c;
+    // Programs drive the machine with its window hidden or the display
+    // asleep; App Nap would slow the timer that keeps it going.
+    if (!_activity)
+        _activity = [NSProcessInfo.processInfo
+            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical
+                              reason:@"Control socket"];
     return nil;
 }
 

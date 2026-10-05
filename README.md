@@ -79,6 +79,10 @@ build/Sally.app/Contents/MacOS/Sally -control 6502 game.rom
 make run ROM=game.rom CONTROL=/tmp/sally.sock
 ```
 
+The machine keeps running when its window is hidden or minimized or the
+display sleeps: without display refreshes, a timer paces the frames by
+the clock and keeps the socket answering.
+
 Commands are lines of text. Each one is answered with `ok`, `error
 MESSAGE` or the reply listed below. Inputs from the socket add to the
 keyboard and controllers rather than replacing them, and stay held until
@@ -182,9 +186,10 @@ The frontend:
   level steady instead of letting it drift into dropouts.
 - `SallyView.m`, `Keyboard.m`, `main.m`: the window, keyboard mapping,
   menus, drag and drop, game controllers.
-- `control.c`: the control socket. The emulation thread polls it once a
-  display refresh and runs its commands between frames, so the socket
-  touches the machine from the same thread as everything else.
+- `control.c`: the control socket. The emulation thread polls it from a
+  60 Hz timer and runs its commands between frames, so the socket touches
+  the machine from the same thread as everything else. When the display
+  link stops calling, the same timer runs the frames.
 
 The app icon, an arcade ball-top joystick on sky blue, is drawn in code by
 `tools/makeicon.m` at build time and packed with `iconutil`.
