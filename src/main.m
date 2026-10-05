@@ -345,7 +345,58 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
 
 @end
 
+// `-headless -control ADDRESS [FILE]`: no window, no sound, no Dock icon;
+// the machine answers the control socket on the main thread.
+static int run_headless(int argc, const char *argv[]) {
+    const char *address = NULL, *file = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-control") && i + 1 < argc)
+            address = argv[++i];
+        else if (argv[i][0] != '-' && !file)
+            file = argv[i];
+    }
+    if (!address) {
+        fprintf(stderr, "Sally: -headless needs -control ADDRESS\n");
+        return 2;
+    }
+    // Exits with the program that started it, so a trainer that dies does
+    // not leave machines running. Ctrl-C in its terminal is for that
+    // program, which may still need the machine to finish up.
+    signal(SIGINT, SIG_IGN);
+    static dispatch_source_t parent;
+    parent = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)getppid(), DISPATCH_PROC_EXIT,
+                                    dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_event_handler(parent, ^{
+        exit(0);
+    });
+    dispatch_resume(parent);
+
+    Emulator *emulator = [[Emulator alloc] initHeadless];
+    NSString *error = [emulator listenOn:@(address)];
+    if (error) {
+        fprintf(stderr, "Sally: control socket: %s\n", error.UTF8String);
+        return 1;
+    }
+    if (file) {
+        NSError *readError = nil;
+        NSData *data = [NSData dataWithContentsOfFile:@(file) options:0 error:&readError];
+        NSString *message = data ? [emulator loadCartridge:data] : readError.localizedDescription;
+        if (message) {
+            fprintf(stderr, "Sally: %s: %s\n", file, message.UTF8String);
+            return 1;
+        }
+    }
+    [emulator runHeadless];
+    return 0;
+}
+
 int main(int argc, const char *argv[]) {
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "-headless")) {
+            @autoreleasepool {
+                return run_headless(argc, argv);
+            }
+        }
     @autoreleasepool {
         NSApplication *app = NSApplication.sharedApplication;
         app.activationPolicy = NSApplicationActivationPolicyRegular;

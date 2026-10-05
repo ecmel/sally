@@ -224,11 +224,21 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     for (int i = 0; i < 3; i++)
         _frames[i] = [_device newBufferWithLength:FRAME_WIDTH * FRAME_HEIGHT options:MTLResourceStorageModeShared];
     _inflight = dispatch_semaphore_create(3);
-
-    _m = machine_new();
-    _palette = [_device newBufferWithBytes:gtia_palette length:sizeof gtia_palette options:MTLResourceStorageModeShared];
-
     _audio = audio_open();
+    [self setUpMachine];
+    // After the machine, which works out the palette.
+    _palette = [_device newBufferWithBytes:gtia_palette length:sizeof gtia_palette options:MTLResourceStorageModeShared];
+    return self;
+}
+
+- (instancetype)initHeadless {
+    if (!(self = [super init])) return nil;
+    [self setUpMachine];
+    return self;
+}
+
+- (void)setUpMachine {
+    _m = machine_new();
     _rate = _audio ? audio_rate(_audio) : 48000;
     _audioTarget = (_audio ? audio_device_frames(_audio) : 512) + _rate * 0.025;
     _fillAverage = _audioTarget;
@@ -236,7 +246,6 @@ static int pacer_frames(Pacer *p, double t, double hz) {
 
     _keyHeld = -1;
     _stats = getenv("SALLY_STATS") != NULL;
-    return self;
 }
 
 - (void)dealloc {
@@ -359,6 +368,34 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     int n = pacer_frames(&_timerPacer, now, CPU_HZ / (LINES_PER_FRAME * CYCLES_PER_LINE));
     if (self.paused) n = 0;
     for (int i = 0; i < n; i++) [self runFrame];
+}
+
+// Headless: the control socket and the machine on this thread, frames by
+// the clock unless paused, and nothing else. The loop sleeps until a
+// command arrives or a frame is due, so commands are answered at once.
+- (void)runHeadless {
+    double hz = CPU_HZ / (LINES_PER_FRAME * CYCLES_PER_LINE);
+    double next = 0;  // when the next frame is due, 0 to start afresh
+    for (;;) {
+        @autoreleasepool {
+            double now = CACurrentMediaTime();
+            if (self.paused) {
+                next = 0;
+            } else {
+                if (next == 0 || now - next > 0.25) next = now;
+                while (now >= next) {
+                    [self runFrame];
+                    next += 1 / hz;
+                }
+            }
+            if (_control) {
+                control_wait(_control, self.paused ? -1 : next - CACurrentMediaTime());
+                control_poll(_control, control_line, (__bridge void *)self);
+            } else if (!self.paused) {
+                [NSThread sleepForTimeInterval:fmax(0, next - CACurrentMediaTime())];
+            }
+        }
+    }
 }
 
 - (void)feedKeys {
@@ -567,6 +604,31 @@ static bool parse_key(const char *s, int *code) {
     return true;
 }
 
+// `ADDR [COUNT]`, both in hex, COUNT 1-100 (default 1).
+static bool parse_peek(const char *s, int *addr, int *count) {
+    char *end;
+    long a = strtol(s, &end, 16), n = 1;
+    if (end == s || a < 0 || a > 0xFFFF) return false;
+    if (*end == ' ') {
+        const char *p = end + 1;
+        n = strtol(p, &end, 16);
+        if (end == p) return false;
+    }
+    if (*end || n < 1 || n > 0x100) return false;
+    *addr = (int)a;
+    *count = (int)n;
+    return true;
+}
+
+// A frame count for `step`, 1-100000 in decimal.
+static bool parse_count(const char *s, int *count) {
+    char *end;
+    long n = strtol(s, &end, 10);
+    if (!*s || *end || n < 1 || n > 100000) return false;
+    *count = (int)n;
+    return true;
+}
+
 // Runs one command from the control socket, on the emulation thread. The
 // commands are listed in the README.
 - (void)command:(char *)text client:(ControlClient *)client {
@@ -580,7 +642,7 @@ static bool parse_key(const char *s, int *code) {
         arg = text + strlen(text);
     }
     const char *cmd = text;
-    int bits, code;
+    int bits, code, addr, count;
     bool on;
 
     if (!*cmd) return;
@@ -630,6 +692,12 @@ static bool parse_key(const char *s, int *code) {
         control_printf(client, "frame %llu %d %zu\n", _frameCount, FRAME_HEIGHT, n);
         control_send(client, _lines, n);
         return;
+    } else if (!strcmp(cmd, "quit") && !*arg) {
+        control_printf(client, "ok\n");
+        control_close(_control);
+        exit(0);
+    } else if (!strcmp(cmd, "step") && parse_count(arg, &count)) {
+        for (int i = 0; i < count; i++) [self runFrame];
     } else if (!strcmp(cmd, "stream") && parse_flag(arg, &on)) {
         control_set_streaming(client, on);
     } else if (!strcmp(cmd, "palette") && !*arg) {
@@ -645,6 +713,16 @@ static bool parse_key(const char *s, int *code) {
     } else if (!strcmp(cmd, "status") && !*arg) {
         control_printf(client, "status frame %llu paused %d cart %d\n", _frameCount, self.paused, m->cart != NULL);
         return;
+    } else if (!strcmp(cmd, "peek") && parse_peek(arg, &addr, &count)) {
+        char reply[16 + 256 * 3];
+        int n = snprintf(reply, sizeof reply, "peek %04X", addr);
+        for (int i = 0; i < count; i++) {
+            uint16_t a = (uint16_t)(addr + i);
+            const uint8_t *page = m->rmap[a >> 8];
+            n += snprintf(reply + n, sizeof reply - n, " %02X", page ? page[a & 0xFF] : 0xFF);
+        }
+        control_printf(client, "%s\n", reply);
+        return;
     } else {
         control_printf(client, "error bad command: %s%s%s\n", cmd, *arg ? " " : "", arg);
         return;
@@ -653,6 +731,7 @@ static bool parse_key(const char *s, int *code) {
 }
 
 - (void)notifyCartridge:(NSURL *)url {
+    if (!self.cartridgeChanged) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.cartridgeChanged) self.cartridgeChanged(url);
     });

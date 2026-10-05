@@ -3,8 +3,10 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -210,6 +212,19 @@ static void read_lines(ControlClient *cl, void (*line)(void *, ControlClient *, 
             control_printf(cl, "error line too long\n");
             cl->nin = 0;
         }
+    }
+}
+
+void control_wait(Control *c, double timeout) {
+    struct pollfd fds[64];
+    nfds_t n = 0;
+    fds[n++] = (struct pollfd){.fd = c->fd, .events = POLLIN};
+    for (ControlClient *cl = c->clients; cl && n < sizeof fds / sizeof fds[0]; cl = cl->next) {
+        if (cl->dead) continue;
+        fds[n++] = (struct pollfd){.fd = cl->fd, .events = POLLIN | (cl->nout > cl->sent ? POLLOUT : 0)};
+    }
+    int ms = timeout < 0 ? -1 : (int)ceil(timeout * 1000);
+    while (poll(fds, n, ms) < 0 && errno == EINTR) {
     }
 }
 

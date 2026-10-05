@@ -83,6 +83,16 @@ The machine keeps running when its window is hidden or minimized or the
 display sleeps: without display refreshes, a timer paces the frames by
 the clock and keeps the socket answering.
 
+With `-headless` Sally opens no window, plays no sound and shows no
+Dock icon: only the socket drives it, and it exits with the program that
+started it (it ignores Ctrl-C, which is meant for that program). It answers each command as it arrives, so a program can pause
+the machine and advance it with `step` as fast as the Mac allows, with
+several copies running side by side:
+
+```sh
+build/Sally.app/Contents/MacOS/Sally -headless -control /tmp/sally1.sock game.rom
+```
+
 Commands are lines of text. Each one is answered with `ok`, `error
 MESSAGE` or the reply listed below. Inputs from the socket add to the
 keyboard and controllers rather than replacing them, and stay held until
@@ -105,6 +115,9 @@ two frames.
 | `load PATH`         | Opens a cartridge (an absolute path is safest; a relative one goes from Sally's working directory) |
 | `eject`             | Removes the cartridge                                        |
 | `status`            | Replies `status frame N paused P cart C`                     |
+| `step N`            | Runs N frames (decimal) at once, paused or not, then replies `ok` |
+| `peek ADDR [N]`     | Replies `peek ADDR` and N bytes (hex, default 1, at most 100) of memory as the CPU sees it; I/O reads `FF` |
+| `quit`              | Replies `ok` and exits                                       |
 | `frame`             | Replies with the latest frame (see below)                    |
 | `stream 0` / `1`    | Sends every frame from now on, or stops                      |
 | `palette`           | Replies `palette 768`, then 256 RGB triples                  |

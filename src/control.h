@@ -18,6 +18,9 @@ void control_close(Control *c);
 // Accepts connections, reads what has arrived and calls `line` for each
 // complete line, without its newline. Then sends what is waiting.
 void control_poll(Control *c, void (*line)(void *ctx, ControlClient *client, char *text), void *ctx);
+// Sleeps until a client connects or sends something, a client with output
+// waiting can take more, or `timeout` seconds pass (forever if negative).
+void control_wait(Control *c, double timeout);
 
 // Queues output to a client. Nothing is ever sent in part: a client that
 // falls behind gets its bytes later, in order.

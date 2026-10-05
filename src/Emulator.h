@@ -28,6 +28,10 @@ typedef NS_OPTIONS(uint32_t, JoyBits) {
 - (instancetype)initWithLayer:(CAMetalLayer *)layer;
 // Starts the emulation thread; call once the layer is in a window.
 - (void)start;
+// Without a picture or sound, for the control socket alone.
+- (instancetype)initHeadless;
+// Runs the machine and the control socket on this thread, forever.
+- (void)runHeadless;
 
 // Returns an error message, or nil.
 - (NSString *)loadCartridge:(NSData *)data;
