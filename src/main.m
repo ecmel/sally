@@ -141,11 +141,24 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
         [weakSelf openCartridge:url];
     };
 
+    // `-control ADDRESS` opens the control socket.
+    NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
+    NSString *file = nil;
+    for (NSUInteger i = 1; i < args.count; i++) {
+        if ([args[i] isEqualToString:@"-control"] && i + 1 < args.count) {
+            NSString *error = [_emulator listenOn:args[++i]];
+            if (error) fprintf(stderr, "Sally: control socket: %s\n", error.UTF8String);
+        } else if (![args[i] hasPrefix:@"-"] && !file) {
+            file = args[i];
+        }
+    }
+    _emulator.cartridgeChanged = ^(NSURL *url) {
+        [weakSelf showCartridge:url];
+    };
+
     // A file from the command line, from Finder, or the last one.
     NSURL *url = _pending;
-    NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
-    for (NSUInteger i = 1; !url && i < args.count; i++)
-        if (![args[i] hasPrefix:@"-"]) url = [NSURL fileURLWithPath:args[i]];
+    if (!url && file) url = [NSURL fileURLWithPath:file];
     if (!url) {
         NSString *last = [NSUserDefaults.standardUserDefaults stringForKey:LastCartridgeKey];
         if (last && [NSFileManager.defaultManager fileExistsAtPath:last]) url = [NSURL fileURLWithPath:last];
@@ -203,6 +216,17 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
         [alert runModal];
         return;
     }
+    [self showCartridge:url];
+}
+
+// Shows the cartridge in the window and remembers it, or forgets it (nil).
+- (void)showCartridge:(NSURL *)url {
+    if (!url) {
+        _window.title = @"Sally";
+        _window.representedURL = nil;
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:LastCartridgeKey];
+        return;
+    }
     _window.representedURL = url;
     _window.title = url.URLByDeletingPathExtension.lastPathComponent;
     // The file's icon as its type defines it; the title bar may otherwise
@@ -228,9 +252,7 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
 
 - (void)ejectCartridge:(id)sender {
     [_emulator ejectCartridge];
-    _window.title = @"Sally";
-    _window.representedURL = nil;
-    [NSUserDefaults.standardUserDefaults removeObjectForKey:LastCartridgeKey];
+    [self showCartridge:nil];
 }
 
 #pragma mark Machine

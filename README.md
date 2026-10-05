@@ -67,6 +67,77 @@ OPTION and HELP stay down while their shortcuts are held, so a game or the
 OS can see OPTION held at boot. Cmd-P pauses, Cmd-0 fits the window to the
 picture, Ctrl-Cmd-F enters full screen.
 
+## Control socket
+
+Other programs can drive Sally through a socket: everything a player can
+do, and the picture as it is drawn. Start it with `-control ADDRESS`,
+where the address is a port number (TCP, listening on 127.0.0.1 only) or
+the path of a Unix socket:
+
+```sh
+build/Sally.app/Contents/MacOS/Sally -control 6502 game.rom
+make run ROM=game.rom CONTROL=/tmp/sally.sock
+```
+
+Commands are lines of text. Each one is answered with `ok`, `error
+MESSAGE` or the reply listed below. Inputs from the socket add to the
+keyboard and controllers rather than replacing them, and stay held until
+changed. As with the keyboard, a press shorter than a frame still lasts
+two frames.
+
+| Command             | Does                                                         |
+|---------------------|--------------------------------------------------------------|
+| `stick UDLR` / `-`  | Joystick directions held, e.g. `stick UL`; `-` centers it    |
+| `fire 0` / `1`      | Fire button released or held                                 |
+| `consol SEO` / `-`  | START, SELECT, OPTION held, e.g. `consol S`                  |
+| `key HH`            | Presses and releases an Atari key (keyboard code in hex, bit 6 Shift, bit 7 Control; HELP is `11`) |
+| `keydown HH`        | Holds an Atari key down                                      |
+| `keyup HH`          | Releases it                                                  |
+| `shift 0` / `1`     | SHIFT held on its own                                        |
+| `break`             | BREAK                                                        |
+| `reset`             | RESET                                                        |
+| `power`             | Power cycle                                                  |
+| `pause 0` / `1`     | Pauses or resumes                                            |
+| `load PATH`         | Opens a cartridge (an absolute path is safest; a relative one goes from Sally's working directory) |
+| `eject`             | Removes the cartridge                                        |
+| `status`            | Replies `status frame N paused P cart C`                     |
+| `frame`             | Replies with the latest frame (see below)                    |
+| `stream 0` / `1`    | Sends every frame from now on, or stops                      |
+| `palette`           | Replies `palette 768`, then 256 RGB triples                  |
+
+A frame is GTIA's output for lines 8-247 of the beam, the 192 color
+clocks of each that reach the screen. It comes as a line `frame N 240
+LENGTH`, then LENGTH bytes: for each of the 240 lines, a flag byte and
+then
+
+- flag 0: 192 bytes, one per color clock;
+- flag 1: 384 bytes, one per half color clock, on a line drawn in high
+  resolution (ANTIC modes 2, 3 and F), where the two halves of a color
+  clock can differ in luminance.
+
+Each byte is an Atari color value, which `palette` maps to RGB. N counts
+frames emulated since launch. Most games have no high resolution lines,
+which makes a frame 46,320 bytes. A stream sends each frame as the beam
+finishes it, about 60 a second (none while paused). Streamed frames
+arrive between replies, so a client reads the first word of each line to
+tell them apart. A client that falls behind misses frames instead of
+slowing the emulator down.
+
+```python
+import socket
+s = socket.create_connection(("127.0.0.1", 6502))
+f = s.makefile("rb")
+s.sendall(b"consol S\n"); f.readline()       # hold START
+s.sendall(b"frame\n")
+_, n, h, length = f.readline().split()
+data, rows, i = f.read(int(length)), [], 0
+for _ in range(int(h)):
+    if data[i]:                                # 384 half clocks
+        rows.append(data[i + 1:i + 385]); i += 385
+    else:                                      # 192 clocks, doubled to 384
+        rows.append(bytes(c for c in data[i + 1:i + 193] for _ in (0, 1))); i += 193
+```
+
 ## How it works
 
 `src/` holds the machine in C (C is Objective-C's base language, and the
@@ -111,6 +182,9 @@ The frontend:
   level steady instead of letting it drift into dropouts.
 - `SallyView.m`, `Keyboard.m`, `main.m`: the window, keyboard mapping,
   menus, drag and drop, game controllers.
+- `control.c`: the control socket. The emulation thread polls it once a
+  display refresh and runs its commands between frames, so the socket
+  touches the machine from the same thread as everything else.
 
 The app icon, an arcade ball-top joystick on sky blue, is drawn in code by
 `tools/makeicon.m` at build time and packed with `iconutil`.

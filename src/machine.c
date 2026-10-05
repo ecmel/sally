@@ -240,6 +240,7 @@ void machine_end_line(Machine *m) {
     m->gtia.cc = 0;
     m->x = 0;
     if (++m->line == LINES_PER_FRAME) m->line = 0;
+    if (m->line >= FRAME_TOP && m->line < FRAME_BOTTOM) m->frame_hires[m->line - FRAME_TOP] = false;
     antic_start_line(m);
     if (m->line == FRAME_BOTTOM) m->frame_done = true;
 }

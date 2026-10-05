@@ -38,6 +38,13 @@ typedef NS_OPTIONS(uint32_t, JoyBits) {
 - (void)keyDown:(int)code;
 - (void)keyUp:(int)code;
 
+// Opens the control socket (see control.h for `address`). Call before
+// -start. Returns an error message, or nil.
+- (NSString *)listenOn:(NSString *)address;
+// Called on the main thread after a cartridge is loaded (with its file) or
+// ejected (with nil) through the control socket.
+@property (nonatomic, copy) void (^cartridgeChanged)(NSURL *url);
+
 @property (atomic) BOOL paused;
 // Input, read once a frame. A press shorter than that still lasts two
 // frames, so a quick tap is never lost between them.

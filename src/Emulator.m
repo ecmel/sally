@@ -1,12 +1,14 @@
 #import "Emulator.h"
 
 #import <Metal/Metal.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
 #import "Audio.h"
+#include "control.h"
 #include "machine.h"
 
 // Width of a color clock relative to a scanline's height on an NTSC screen.
@@ -30,6 +32,28 @@ static NSString *const shader_source =
      "    uint rgb = palette[frame[y * 384 + x]];\n"
      "    return half4(half((rgb >> 16) & 255), half((rgb >> 8) & 255), half(rgb & 255), 255.0h) / 255.0h;\n"
      "}\n";
+
+static void control_line(void *ctx, ControlClient *client, char *text);
+
+// The control socket's frame format: each line of the frame buffer as GTIA
+// put it out, a flag byte and then one color per color clock (0, 192
+// bytes) or, on a high resolution line, one per half clock (1, 384 bytes).
+enum { LINES_MAX = FRAME_HEIGHT * (1 + FRAME_WIDTH) };
+
+static size_t encode_lines(const Machine *m, uint8_t *out) {
+    uint8_t *p = out;
+    for (int y = 0; y < FRAME_HEIGHT; y++) {
+        const uint8_t *row = m->frame + y * FRAME_WIDTH;
+        *p++ = m->frame_hires[y];
+        if (m->frame_hires[y]) {
+            memcpy(p, row, FRAME_WIDTH);
+            p += FRAME_WIDTH;
+        } else {
+            for (int x = 0; x < FRAME_CLOCKS; x++) *p++ = row[x * 2];
+        }
+    }
+    return p - out;
+}
 
 typedef struct {
     uint32_t origin[2];
@@ -127,6 +151,13 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     _Atomic uint32_t _keyboardJoystick, _padJoystick, _consoleKeys, _pressed;
     uint8_t _hold[16];
 
+    // The control socket and what it holds down (emulation thread only).
+    Control *_control;
+    uint32_t _remoteJoystick, _remoteConsole;
+    bool _remoteShift;
+    uint64_t _frameCount;  // frames emulated since launch
+    uint8_t _lines[LINES_MAX];  // a frame in the socket's line format
+
     // Statistics, printed every second with SALLY_STATS=1.
     BOOL _stats;
     double _statsStart;
@@ -203,6 +234,7 @@ static int pacer_frames(Pacer *p, double t, double hz) {
 }
 
 - (void)dealloc {
+    control_close(_control);
     audio_close(_audio);
     machine_free(_m);
 }
@@ -282,6 +314,7 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     int n = pacer_frames(&_pacer, t, hz);
     if (self.paused) n = 0;
 
+    if (_control) control_poll(_control, control_line, (__bridge void *)self);
     double start = CACurrentMediaTime();
     for (int i = 0; i < n; i++) [self runFrame];
     [self draw:update.drawable];
@@ -325,7 +358,8 @@ static int pacer_frames(Pacer *p, double t, double hz) {
 
 - (void)runFrame {
     Machine *m = _m;
-    uint32_t held = self.keyboardJoystick | self.padJoystick | self.consoleKeys << 8;
+    uint32_t held = self.keyboardJoystick | self.padJoystick | _remoteJoystick |
+                    (self.consoleKeys | _remoteConsole) << 8;
     uint32_t pressed = atomic_exchange(&_pressed, 0);
     for (int b = 0; b < 16; b++) {
         if (pressed & (1u << b)) _hold[b] = 2;
@@ -338,9 +372,16 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     m->trig[0] = (held & JoyFire) != 0;
     m->consol_keys = (held >> 8) & 7;
     [self feedKeys];
-    if (_keyHeld < 0) m->pokey.shift_down = self.shiftHeld;
+    if (_keyHeld < 0) m->pokey.shift_down = self.shiftHeld || _remoteShift;
 
     machine_run_frame(m);
+    _frameCount++;
+    if (_control && control_streaming(_control)) {
+        char header[64];
+        size_t n = encode_lines(m, _lines);
+        snprintf(header, sizeof header, "frame %llu %d %zu\n", _frameCount, FRAME_HEIGHT, n);
+        control_broadcast(_control, header, _lines, n);
+    }
 
     if (_audio) {
         audio_write(_audio, m->pokey.audio, m->pokey.naudio);
@@ -450,6 +491,141 @@ static int pacer_frames(Pacer *p, double t, double hz) {
 
 - (void)keyUp:(int)code {
     [self queueKey:code down:false];
+}
+
+#pragma mark Control socket
+
+- (NSString *)listenOn:(NSString *)address {
+    char err[256];
+    Control *c = control_open(address.fileSystemRepresentation, err, sizeof err);
+    if (!c) return @(err);
+    control_close(_control);
+    _control = c;
+    return nil;
+}
+
+static void control_line(void *ctx, ControlClient *client, char *text) {
+    [(__bridge Emulator *)ctx command:text client:client];
+}
+
+// Parses `s` as letters from `set` (each giving the bit of its position),
+// or "-" for none. Returns -1 for anything else.
+static int letter_bits(const char *s, const char *set) {
+    if (!strcmp(s, "-")) return 0;
+    int bits = 0;
+    for (; *s; s++) {
+        const char *p = strchr(set, toupper((unsigned char)*s));
+        if (!p) return -1;
+        bits |= 1 << (p - set);
+    }
+    return bits;
+}
+
+static bool parse_flag(const char *s, bool *on) {
+    if (!strcmp(s, "0") || !strcmp(s, "1")) {
+        *on = *s == '1';
+        return true;
+    }
+    return false;
+}
+
+static bool parse_key(const char *s, int *code) {
+    char *end;
+    long v = strtol(s, &end, 16);
+    if (!*s || *end || v < 0 || v > 0xFF) return false;
+    *code = (int)v;
+    return true;
+}
+
+// Runs one command from the control socket, on the emulation thread. The
+// commands are listed in the README.
+- (void)command:(char *)text client:(ControlClient *)client {
+    Machine *m = _m;
+    while (*text == ' ') text++;
+    char *arg = strchr(text, ' ');
+    if (arg) {
+        *arg++ = 0;
+        while (*arg == ' ') arg++;
+    } else {
+        arg = text + strlen(text);
+    }
+    const char *cmd = text;
+    int bits, code;
+    bool on;
+
+    if (!*cmd) return;
+    if (!strcmp(cmd, "stick") && (bits = letter_bits(arg, "UDLR")) >= 0) {
+        _remoteJoystick = (_remoteJoystick & JoyFire) | bits;
+        atomic_fetch_or(&_pressed, bits);
+    } else if (!strcmp(cmd, "fire") && parse_flag(arg, &on)) {
+        _remoteJoystick = on ? _remoteJoystick | JoyFire : _remoteJoystick & ~JoyFire;
+        if (on) atomic_fetch_or(&_pressed, JoyFire);
+    } else if (!strcmp(cmd, "consol") && (bits = letter_bits(arg, "SEO")) >= 0) {
+        _remoteConsole = bits;
+        atomic_fetch_or(&_pressed, bits << 8);
+    } else if (!strcmp(cmd, "shift") && parse_flag(arg, &on)) {
+        _remoteShift = on;
+    } else if (!strcmp(cmd, "key") && parse_key(arg, &code)) {
+        [self queueKey:code down:true];
+        [self queueKey:code down:false];
+    } else if (!strcmp(cmd, "keydown") && parse_key(arg, &code)) {
+        [self queueKey:code down:true];
+    } else if (!strcmp(cmd, "keyup") && parse_key(arg, &code)) {
+        [self queueKey:code down:false];
+    } else if (!strcmp(cmd, "break") && !*arg) {
+        machine_break_key(m);
+    } else if (!strcmp(cmd, "reset") && !*arg) {
+        machine_warm_reset(m);
+    } else if (!strcmp(cmd, "power") && !*arg) {
+        machine_cold_reset(m);
+    } else if (!strcmp(cmd, "pause") && parse_flag(arg, &on)) {
+        self.paused = on;
+    } else if (!strcmp(cmd, "load") && *arg) {
+        NSURL *url = [NSURL fileURLWithPath:@(arg)];
+        NSError *error = nil;
+        NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&error];
+        const char *err = data ? machine_load_cart(m, data.bytes, data.length) : error.localizedDescription.UTF8String;
+        if (err) {
+            control_printf(client, "error %s\n", err);
+            return;
+        }
+        machine_cold_reset(m);
+        [self notifyCartridge:url];
+    } else if (!strcmp(cmd, "eject") && !*arg) {
+        machine_eject_cart(m);
+        machine_cold_reset(m);
+        [self notifyCartridge:nil];
+    } else if (!strcmp(cmd, "frame") && !*arg) {
+        size_t n = encode_lines(m, _lines);
+        control_printf(client, "frame %llu %d %zu\n", _frameCount, FRAME_HEIGHT, n);
+        control_send(client, _lines, n);
+        return;
+    } else if (!strcmp(cmd, "stream") && parse_flag(arg, &on)) {
+        control_set_streaming(client, on);
+    } else if (!strcmp(cmd, "palette") && !*arg) {
+        uint8_t rgb[256 * 3];
+        for (int i = 0; i < 256; i++) {
+            rgb[i * 3] = gtia_palette[i] >> 16;
+            rgb[i * 3 + 1] = gtia_palette[i] >> 8;
+            rgb[i * 3 + 2] = gtia_palette[i];
+        }
+        control_printf(client, "palette %zu\n", sizeof rgb);
+        control_send(client, rgb, sizeof rgb);
+        return;
+    } else if (!strcmp(cmd, "status") && !*arg) {
+        control_printf(client, "status frame %llu paused %d cart %d\n", _frameCount, self.paused, m->cart != NULL);
+        return;
+    } else {
+        control_printf(client, "error bad command: %s%s%s\n", cmd, *arg ? " " : "", arg);
+        return;
+    }
+    control_printf(client, "ok\n");
+}
+
+- (void)notifyCartridge:(NSURL *)url {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.cartridgeChanged) self.cartridgeChanged(url);
+    });
 }
 
 @end

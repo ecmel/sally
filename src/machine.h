@@ -143,6 +143,9 @@ typedef struct Machine {
     uint8_t consol_keys;   // START 1, SELECT 2, OPTION 4
 
     uint8_t frame[FRAME_HEIGHT * FRAME_WIDTH];
+    // Lines of the frame drawn in high resolution, where the two pixels of
+    // a color clock can differ. On the others they are always the same.
+    bool frame_hires[FRAME_HEIGHT];
 } Machine;
 
 // machine.c

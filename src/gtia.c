@@ -211,6 +211,7 @@ static void draw(Machine *m, int start, int end) {
     // High resolution: the playfield is PF2 for priority; lit pixels take
     // PF1's luminance whatever is on top, and collide as PF2.
     uint8_t lum = col[5] & 0x0F;
+    m->frame_hires[m->line - FRAME_TOP] = true;
     for (int cc = start; cc < end; cc++, out += 2) {
         uint8_t objs = any ? pm[cc] : 0, p = a->pf[cc], h = p ? a->hi[cc] : 0;
         uint8_t c;

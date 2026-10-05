@@ -22,10 +22,11 @@ SIGN_IDENTITY ?= $(APPLE_SIGNING_IDENTITY)
 DMG = $(BUILD)/Sally$(if $(VERSION),-$(VERSION)).dmg
 
 CORE = src/cpu.c src/machine.c src/antic.c src/gtia.c src/pokey.c src/os.c src/asm6502.c
+FRONT_C = src/control.c
 FRONT = src/main.m src/SallyView.m src/Emulator.m src/Audio.m src/Keyboard.m
 
 CORE_OBJS = $(CORE:src/%.c=$(BUILD)/%.o)
-FRONT_OBJS = $(FRONT:src/%.m=$(BUILD)/%.o)
+FRONT_OBJS = $(FRONT:src/%.m=$(BUILD)/%.o) $(FRONT_C:src/%.c=$(BUILD)/%.o)
 
 all: $(EXE) $(ICON)
 
@@ -76,7 +77,7 @@ test: $(BUILD)/cputest $(KLAUS)
 # Runs the build directly: `open` would register build/Sally.app with
 # Launch Services next to the installed copy.
 run: $(EXE) $(ICON)
-	$(EXE) $(if $(ROM),"$(ROM)")
+	$(EXE) $(if $(CONTROL),-control "$(CONTROL)") $(if $(ROM),"$(ROM)")
 
 # Installs the app and registers it with Launch Services, so Finder opens
 # cartridges with the installed copy rather than the ones in build/. The
