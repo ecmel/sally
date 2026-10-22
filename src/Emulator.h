@@ -7,7 +7,7 @@
 // Methods are called on the main thread; the work is handed to the
 // emulation thread, which alone touches the machine.
 
-#import <AppKit/AppKit.h>
+#import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 
 // The lines shown: the frame buffer less 6 lines of overscan at the top

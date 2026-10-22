@@ -69,7 +69,7 @@ Control *control_open(const char *addr, char *err, size_t errlen) {
         c->fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (c->fd < 0) goto fail;
         unlink(addr);  // left over from a run that did not close it
-        if (bind(c->fd, (struct sockaddr *)&sun, SUN_LEN(&sun)) < 0) goto fail;
+        if (bind(c->fd, (struct sockaddr *)&sun, sun.sun_len) < 0) goto fail;
         strcpy(c->path, addr);
     }
     if (listen(c->fd, 8) < 0) goto fail;

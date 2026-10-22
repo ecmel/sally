@@ -1,5 +1,6 @@
-// Sound output: the default output device through an AudioUnit, fed from a
-// single-producer single-consumer ring buffer of mono samples.
+// Sound output: the default output device through an AudioUnit (RemoteIO
+// on iOS), fed from a single-producer single-consumer ring buffer of mono
+// samples.
 
 #ifndef SALLY_AUDIO_H
 #define SALLY_AUDIO_H

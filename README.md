@@ -1,8 +1,8 @@
 # Sally
 
-An Atari 800 XL emulator for macOS, written in Objective-C and C with no
-dependencies beyond the system frameworks (Cocoa, Metal, Core Audio,
-GameController). It is named after the XL's CPU, the 6502C "Sally".
+An Atari 800 XL emulator for macOS, iPhone and iPad, written in
+Objective-C and C with no dependencies beyond the system frameworks
+(Cocoa or UIKit, Metal, Core Audio, GameController). It is named after the XL's CPU, the 6502C "Sally".
 
 The goals are accuracy where games can tell the difference, and frames
 that reach the screen evenly: scrolling should be as smooth as on the real
@@ -39,6 +39,39 @@ access. Games that need 128K, like the Prince of Persia port, run.
 opens `.rom` and `.car` files in Sally and shows them with a Sally document
 icon. `.bin` files list Sally under Open With, without making it their
 default.
+
+## iPhone and iPad
+
+The iOS app (iOS 17 or later, landscape only) is built with Xcode from a
+project that [XcodeGen](https://github.com/yonaskolb/XcodeGen) generates
+from `project.yml` into `build/ios` (`brew install xcodegen`). It builds
+Release by default (`CONFIGURATION=Debug` for a debug build), since the
+emulator needs the optimizer to keep up.
+
+```sh
+make ios-sim                                  # build, install and launch in the simulator
+make ios-sim SIMULATOR="iPad (9th generation)"
+make ios-device DEVICE="My iPhone"            # build, install and launch on a device
+make ios-open                                 # open the project in Xcode
+```
+
+`xcrun devicectl list devices` lists device names. The device must be
+registered with the development team in `project.yml`.
+
+Cartridges live in Sally's folder in the Files app: copy them there, open
+one from Files or another app, or use Import Cartridge in the menu (the
+button in the top left corner), which also lists them all. The last
+cartridge opened comes back at the next launch.
+
+On screen, a touch anywhere on the left half of the screen holds fire,
+and a touch anywhere on the right half steers the joystick toward it
+from the drawn stick. START, SELECT and OPTION are in a row at the
+bottom center and stay down while touched. Reset, power cycle and pause are in
+the menu. A game controller works as on the Mac, with Menu as START and
+Options as SELECT, and hides the on-screen stick and fire button while it
+is connected. A hardware keyboard has the Mac's keys (Command with 1 to 4
+for the console keys and HELP). The machine pauses while the app is in
+the background.
 
 ## Operating system
 
@@ -158,7 +191,8 @@ for _ in range(int(h)):
 ## How it works
 
 `src/` holds the machine in C (C is Objective-C's base language, and the
-hot loop has no message sends) and the Mac frontend in Objective-C.
+hot loop has no message sends) and the frontends in Objective-C: what both
+share in `src/`, the Mac's in `src/mac` and iOS's in `src/ios`.
 
 - `cpu.c`: the 6502 with every bus cycle modelled, dummy reads and writes
   included, and the undocumented opcodes. Each access first waits for a
@@ -193,19 +227,24 @@ The frontend:
   while scrolling. It shows 228 lines, leaving out 6 lines of overscan at
   the top and bottom where games draw nothing, so the picture fits 7 times
   into a 1600-pixel-high screen.
-- `Audio.m`: an AudioUnit at the device's own rate, fed through a lock-free
+- `Audio.m`: an AudioUnit (RemoteIO on iOS) at the device's own rate, fed through a lock-free
   ring buffer. Locking frames to a 60 Hz display runs the machine 0.13%
   fast, so the sample rate is nudged (by at most 0.5%) to keep the buffer
   level steady instead of letting it drift into dropouts.
-- `SallyView.m`, `Keyboard.m`, `main.m`: the window, keyboard mapping,
-  menus, drag and drop, game controllers.
+- `keys.c`: characters to Atari keys, for both keyboards.
+- `mac/SallyView.m`, `mac/Keyboard.m`, `mac/main.m`: the window, keyboard
+  mapping, menus, drag and drop, game controllers.
+- `ios/GameViewController.m`, `ios/TouchControls.m`, `ios/main.m`: the
+  screen, the on-screen controls, the cartridge library and menu, game
+  controllers and a hardware keyboard.
 - `control.c`: the control socket. The emulation thread polls it from a
   60 Hz timer and runs its commands between frames, so the socket touches
   the machine from the same thread as everything else. When the display
   link stops calling, the same timer runs the frames.
 
 The app icon, an arcade ball-top joystick on sky blue, is drawn in code by
-`tools/makeicon.m` at build time and packed with `iconutil`.
+`tools/makeicon.m` at build time and packed with `iconutil` (for iOS, drawn
+full bleed into an asset catalog).
 
 Set `SALLY_STATS=1` to print pacing figures every second: refresh rate,
 frames emulated, missed refreshes, time per update and audio buffer level.

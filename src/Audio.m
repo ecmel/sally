@@ -1,7 +1,13 @@
 #import "Audio.h"
 
 #import <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#import <AVFoundation/AVFoundation.h>
+#else
 #import <CoreAudio/CoreAudio.h>
+#endif
+#include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 
@@ -15,6 +21,9 @@ struct AudioOut {
     _Atomic uint32_t head;  // written by the emulator
     _Atomic uint32_t tail;  // read by the device
     float last;             // the last sample played, faded out on underrun
+#if TARGET_OS_IPHONE
+    void *observer;         // restarts the unit after an interruption
+#endif
 };
 
 static OSStatus render(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus,
@@ -41,9 +50,21 @@ static OSStatus render(void *ctx, AudioUnitRenderActionFlags *flags, const Audio
 AudioOut *audio_open(void) {
     AudioOut *a = calloc(1, sizeof *a);
     if (!a) return NULL;
+#if TARGET_OS_IPHONE
+    // Ambient, as games are: it follows the silent switch and mixes with
+    // other apps' sound.
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    [session setCategory:AVAudioSessionCategoryAmbient error:nil];
+    [session setPreferredIOBufferDuration:256 / session.sampleRate error:nil];
+    [session setActive:YES error:nil];
+#endif
     AudioComponentDescription desc = {
         .componentType = kAudioUnitType_Output,
+#if TARGET_OS_IPHONE
+        .componentSubType = kAudioUnitSubType_RemoteIO,
+#else
         .componentSubType = kAudioUnitSubType_DefaultOutput,
+#endif
         .componentManufacturer = kAudioUnitManufacturer_Apple,
     };
     AudioComponent comp = AudioComponentFindNext(NULL, &desc);
@@ -54,6 +75,10 @@ AudioOut *audio_open(void) {
 
     // Run at the device's own rate so nothing resamples after us, and ask
     // for small device buffers.
+#if TARGET_OS_IPHONE
+    a->rate = session.sampleRate > 0 ? session.sampleRate : 48000;
+    a->device_frames = (int)lround(session.IOBufferDuration * a->rate);
+#else
     AudioStreamBasicDescription hw = {0};
     UInt32 size = sizeof hw;
     AudioUnitGetProperty(a->unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 0, &hw, &size);
@@ -69,6 +94,7 @@ AudioOut *audio_open(void) {
         size = sizeof frames;
         if (AudioObjectGetPropertyData(device, &addr, 0, NULL, &size, &frames) == noErr) a->device_frames = frames;
     }
+#endif
     if (!a->device_frames) a->device_frames = 512;
 
     AudioStreamBasicDescription fmt = {
@@ -89,11 +115,31 @@ AudioOut *audio_open(void) {
         free(a);
         return NULL;
     }
+#if TARGET_OS_IPHONE
+    // A call or another app's audio stops the unit; it stays stopped
+    // unless started again.
+    AudioUnit unit = a->unit;
+    id observer = [NSNotificationCenter.defaultCenter
+        addObserverForName:AVAudioSessionInterruptionNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                    if ([note.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] !=
+                        AVAudioSessionInterruptionTypeEnded)
+                        return;
+                    [AVAudioSession.sharedInstance setActive:YES error:nil];
+                    AudioOutputUnitStart(unit);
+                }];
+    a->observer = (void *)CFBridgingRetain(observer);
+#endif
     return a;
 }
 
 void audio_close(AudioOut *a) {
     if (!a) return;
+#if TARGET_OS_IPHONE
+    [NSNotificationCenter.defaultCenter removeObserver:CFBridgingRelease(a->observer)];
+#endif
     AudioOutputUnitStop(a->unit);
     AudioUnitUninitialize(a->unit);
     AudioComponentInstanceDispose(a->unit);

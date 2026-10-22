@@ -1,7 +1,9 @@
 // Draws the app icon, an arcade ball-top joystick on sky blue, into an .iconset
-// folder for iconutil.
+// folder for iconutil, or with -ios full bleed into an asset catalog's
+// .appiconset, where iOS rounds the corners itself.
 //
 //   makeicon DIR.iconset
+//   makeicon -ios DIR.appiconset
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
@@ -57,9 +59,11 @@ static void radial(CGContextRef c, CGPathRef path, int inner, int outer, CGPoint
     CGColorRelease(colors[1]);
 }
 
-static void draw(CGContextRef c) {
-    // The rounded square every macOS icon sits in.
-    CGPathRef tile = CGPathCreateWithRoundedRect(CGRectMake(100, 100, 824, 824), 185, 185, NULL);
+static void draw(CGContextRef c, bool ios) {
+    // The rounded square every macOS icon sits in; on iOS the square alone,
+    // filling the image.
+    CGRect square = CGRectMake(100, 100, 824, 824);
+    CGPathRef tile = ios ? CGPathCreateWithRect(square, NULL) : CGPathCreateWithRoundedRect(square, 185, 185, NULL);
     gradient(c, tile, 0xB4E5FF, 0x5AAEEC, CGPointMake(0, 924), CGPointMake(0, 100));
 
     // An arcade stick: a ball on a metal shaft in a round base.
@@ -95,11 +99,17 @@ static void draw(CGContextRef c) {
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) CGPathRelease(paths[i]);
 }
 
-static void write_png(NSString *dir, NSString *name, int pixels) {
+static void write_png(NSString *dir, NSString *name, int pixels, bool ios) {
     CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGContextRef c = CGBitmapContextCreate(NULL, pixels, pixels, 8, 0, space, kCGImageAlphaPremultipliedLast);
-    CGContextScaleCTM(c, pixels / 1024.0, pixels / 1024.0);
-    draw(c);
+    CGContextRef c = CGBitmapContextCreate(NULL, pixels, pixels, 8, 0, space,
+                                           (CGBitmapInfo)(ios ? kCGImageAlphaNoneSkipLast : kCGImageAlphaPremultipliedLast));
+    if (ios) {
+        CGContextScaleCTM(c, pixels / 824.0, pixels / 824.0);
+        CGContextTranslateCTM(c, -100, -100);
+    } else {
+        CGContextScaleCTM(c, pixels / 1024.0, pixels / 1024.0);
+    }
+    draw(c, ios);
     CGImageRef image = CGBitmapContextCreateImage(c);
     NSURL *url = [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:name]];
     CGImageDestinationRef dest =
@@ -114,15 +124,28 @@ static void write_png(NSString *dir, NSString *name, int pixels) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        if (argc != 2) {
-            fprintf(stderr, "usage: makeicon DIR.iconset\n");
+        bool ios = argc == 3 && !strcmp(argv[1], "-ios");
+        if (argc != 2 && !ios) {
+            fprintf(stderr, "usage: makeicon DIR.iconset\n       makeicon -ios DIR.appiconset\n");
             return 2;
         }
-        NSString *dir = @(argv[1]);
+        NSString *dir = @(argv[argc - 1]);
         [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        if (ios) {
+            // One image for every size.
+            write_png(dir, @"icon.png", 1024, true);
+            NSString *contents = @"{\"images\":[{\"filename\":\"icon.png\",\"idiom\":\"universal\","
+                                 @"\"platform\":\"ios\",\"size\":\"1024x1024\"}],"
+                                 @"\"info\":{\"author\":\"makeicon\",\"version\":1}}\n";
+            [contents writeToFile:[dir stringByAppendingPathComponent:@"Contents.json"]
+                       atomically:YES
+                         encoding:NSUTF8StringEncoding
+                            error:nil];
+            return 0;
+        }
         for (int size = 16; size <= 512; size *= 2) {
-            write_png(dir, [NSString stringWithFormat:@"icon_%dx%d.png", size, size], size);
-            write_png(dir, [NSString stringWithFormat:@"icon_%dx%d@2x.png", size, size], size * 2);
+            write_png(dir, [NSString stringWithFormat:@"icon_%dx%d.png", size, size], size, false);
+            write_png(dir, [NSString stringWithFormat:@"icon_%dx%d@2x.png", size, size], size * 2, false);
         }
     }
     return 0;
