@@ -692,7 +692,7 @@ static uint8_t tape_read(Machine *m, uint8_t *out, int want) {
     return sio_checksum(p, want) == p[want] ? SIO_OK : SIO_CHECKSUM;
 }
 
-static uint8_t tape_sio(Machine *m) {
+static uint8_t tape_sio(Machine *m, uint8_t *chksum) {
     if (m->ram[DCOMND] != 'R') {
         m->hold_start = 0;
         return SIO_TIMEOUT;
@@ -702,8 +702,10 @@ static uint8_t tape_sio(Machine *m) {
     if (want > (int)sizeof buf) want = sizeof buf;
     uint8_t status = tape_read(m, buf, want);
     uint16_t to = word(m->ram + DBUFLO);
-    if (status == SIO_OK || status == SIO_CHECKSUM)
+    if (status == SIO_OK || status == SIO_CHECKSUM) {
         for (int i = 0; i < want; i++) sio_poke(m, (uint16_t)(to + i), buf[i]);
+        *chksum = sio_checksum(buf, want);
+    }
     return status;
 }
 
@@ -891,10 +893,23 @@ static uint64_t atx_read(Disk *d, int n, uint64_t t, uint8_t *buf) {
     return t + (uint64_t)((wait + bytes) * ATX_UNIT);
 }
 
-static int sio_finish(Machine *m, uint8_t status) {
+// SIO's own variables on page zero, which programs look at after a call:
+// STATUS, and CHKSUM, the checksum of the last frame (the data, or the
+// command frame when there is none). Copy protection checks it.
+enum { STATUS = 0x30, CHKSUM = 0x31 };
+
+static int sio_finish(Machine *m, uint8_t status, uint8_t chksum) {
     m->ram[DSTATS] = status;
+    m->ram[STATUS] = status;
+    m->ram[CHKSUM] = chksum;
     trap_return(m, status);
     return SIO_DONE;
+}
+
+// The checksum of the command frame for the call in the device control block.
+static uint8_t command_checksum(const Machine *m) {
+    uint8_t f[4] = {(uint8_t)(m->ram[DDEVIC] + m->ram[DUNIT] - 1), m->ram[DCOMND], m->ram[DAUX1], m->ram[DAUX2]};
+    return sio_checksum(f, 4);
 }
 
 // SIOV takes the request from the device control block and returns with
@@ -912,11 +927,11 @@ int machine_sio(Machine *m) {
         }
         s->busy = false;
         sio_send(m, s->buf, s->len);
-        return sio_finish(m, s->status);
+        return sio_finish(m, s->status, sio_checksum(s->buf, s->len));
     }
-    uint8_t status = SIO_TIMEOUT;
+    uint8_t status = SIO_TIMEOUT, chksum = command_checksum(m);
     if (m->ram[DDEVIC] == 0x60) {
-        status = tape_sio(m);
+        status = tape_sio(m, &chksum);
     } else {
         int unit = m->ram[DDEVIC] + m->ram[DUNIT] - 1;
         if (unit < 0x31 || unit >= 0x31 + DRIVES) return SIO_NOT_MINE;
@@ -945,11 +960,13 @@ int machine_sio(Machine *m) {
             uint16_t from = word(m->ram + DBUFLO);
             int in = disk_data_in(d, cmd, n);
             for (int i = 0; i < in; i++) buf[i] = sio_peek(m, (uint16_t)(from + i));
+            if (in) chksum = sio_checksum(buf, in);
             status = disk_command(d, cmd, n, buf, &len);
+            if (len) chksum = sio_checksum(buf, len);
             sio_send(m, buf, len);
         }
     }
-    return sio_finish(m, status);
+    return sio_finish(m, status, chksum);
 }
 
 static uint8_t sio_checksum(const uint8_t *p, int n) {

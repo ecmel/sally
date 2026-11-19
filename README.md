@@ -120,7 +120,9 @@ With a disk in D1 it boots from it as the Atari OS does, and DSKINV and
 SIOV reach the drives, which the machine answers directly. With START
 held at power on it boots from the cassette, through SIOV too, and CIO
 opens the cassette as `C:` for reading, also answered by the machine;
-CIO has no other devices. Programs with
+CIO has no other devices. SIOV leaves STATUS and CHKSUM on page zero as
+SIO does, and WARMSV warm starts, calling CASINI or DOSINI and going on
+through DOSVEC, as loaders that hand over that way expect. Programs with
 their own serial routines reach the same drives over an emulated serial
 bus: command frames through POKEY's serial output under the command line,
 replies through serial input and its interrupt. Boot disks of games work,

@@ -231,6 +231,17 @@ int main(void) {
     assert(low > 0);
     io_write(m, 0xD302, 0x3C);
 
+    // A warm start through WARMSV keeps the boot: CASINI is called again,
+    // WARMST is set and the program goes on through DOSVEC.
+    static const uint8_t run[] = {0xEE, 0x20, 0x30, 0x4C, 0x03, 0x06};  // INC $3020; JMP *
+    memcpy(m->ram + 0x0600, run, sizeof run);
+    m->ram[0x0A] = 0x00;
+    m->ram[0x0B] = 0x06;
+    m->ram[0x3020] = 0;
+    m->cpu.pc = 0xE474;
+    for (int i = 0; i < 2; i++) machine_run_frame(m);
+    assert(m->ram[0x3000] == 2 && m->ram[0x08] == 0xFF && m->ram[0x3020] == 1 && m->cpu.pc == 0x0603);
+
     // RESET boots the tape again from the start.
     machine_warm_reset(m);
     for (int i = 0; i < 3; i++) machine_run_frame(m);

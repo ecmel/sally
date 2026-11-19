@@ -152,6 +152,8 @@ int main(void) {
     uint64_t cycles;
     assert(sio(m, 'R', 5, &cycles) == 0x01 && m->ram[0x4000] == 5 && m->ram[0x407F] == 5);
     assert(cycles > 130 * 932 && cycles < 130 * 932 + 2 * turn);
+    // SIO leaves the data frame's checksum in CHKSUM, the status in STATUS.
+    assert(m->ram[0x31] == checksum(m->ram + 0x4000, 128) && m->ram[0x30] == 0x01);
 
     // Which copy of sector 19 comes back depends on when it is asked for.
     bool aa = false, bb = false;
