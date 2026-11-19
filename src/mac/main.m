@@ -226,6 +226,9 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
         return;
     }
     [self showFile:urls.firstObject];
+    // Several disks: the title shows how many, after the one in D1.
+    if (urls.count > 1)
+        _window.title = [NSString stringWithFormat:@"%@ (%lu)", _window.title, (unsigned long)urls.count];
 }
 
 // Shows the file in the window and remembers it, or forgets it (nil).
