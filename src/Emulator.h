@@ -33,9 +33,10 @@ typedef NS_OPTIONS(uint32_t, JoyBits) {
 // Runs the machine and the control socket on this thread, forever.
 - (void)runHeadless;
 
-// Returns an error message, or nil.
-- (NSString *)loadCartridge:(NSData *)data;
-- (void)ejectCartridge;
+// Opens a cartridge, XEX, ATR, ATX or CAS, or several disks for D1 onwards (see
+// machine_load_file). Returns an error message, or nil.
+- (NSString *)loadFiles:(NSArray<NSURL *> *)urls;
+- (void)ejectFile;
 - (void)coldReset;
 - (void)warmReset;
 - (void)breakKey;
@@ -45,9 +46,9 @@ typedef NS_OPTIONS(uint32_t, JoyBits) {
 // Opens the control socket (see control.h for `address`). Call before
 // -start. Returns an error message, or nil.
 - (NSString *)listenOn:(NSString *)address;
-// Called on the main thread after a cartridge is loaded (with its file) or
-// ejected (with nil) through the control socket.
-@property (nonatomic, copy) void (^cartridgeChanged)(NSURL *url);
+// Called on the main thread after a file is loaded (with its URL, the first
+// of several) or ejected (with nil) through the control socket.
+@property (nonatomic, copy) void (^fileChanged)(NSURL *url);
 
 @property (atomic) BOOL paused;
 // Input, read once a frame. A press shorter than that still lasts two

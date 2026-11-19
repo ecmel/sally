@@ -1,7 +1,7 @@
-// Runs a cartridge headless, driven by a script, for checking the emulator
+// Runs a cartridge, XEX, ATR or ATX disk or CAS tape headless, driven by a script, for checking the emulator
 // without a window.
 //
-//   sallyrun [-os OSROM] [-l LABELS] ROM [SCRIPT]
+//   sallyrun [-os OSROM] [-l LABELS] FILE [SCRIPT]
 //
 // Script lines are `FRAME command [args]` (frames in decimal, other
 // numbers in hex), run before their frame:
@@ -25,6 +25,7 @@
 //                     frame AUDF1 AUDC1 ... AUDF4 AUDC4 AUDCTL (hex)
 //   wav FILE          records the sound from now on to FILE (16-bit mono)
 //   prof N            profiles the next N frames: CPU cycles by routine
+//   load FILE         opens a file as the apps do: a disk swaps into D1
 //   end               stops
 //
 // Addresses may be label names when a label file (ld65 -Ln or VICE
@@ -108,7 +109,7 @@ static int parse_addr(const char *s) {
     return (int)v;
 }
 
-// The nearest code label at or below `addr` (only labels in the cartridge
+// The nearest code label at or below `addr` (only labels in the program
 // or OS areas, so RAM variables do not stand in for code).
 static const char *label_for(uint16_t addr, int *offset) {
     int lo = 0, hi = nlabels - 1, best = -1;
@@ -248,7 +249,7 @@ int main(int argc, char **argv) {
         i += 2;
     }
     if (i >= argc) {
-        fprintf(stderr, "usage: sallyrun [-os OSROM] [-l LABELS] ROM [SCRIPT]\n");
+        fprintf(stderr, "usage: sallyrun [-os OSROM] [-l LABELS] FILE [SCRIPT]\n");
         return 2;
     }
     Machine *m = machine_new();
@@ -262,17 +263,17 @@ int main(int argc, char **argv) {
         free(os);
     }
     size_t size;
-    uint8_t *rom = read_file(argv[i], &size);
-    if (!rom) {
+    uint8_t *data = read_file(argv[i], &size);
+    if (!data) {
         perror(argv[i]);
         return 1;
     }
-    const char *err = machine_load_cart(m, rom, size);
+    const char *err = machine_load_file(m, argv[i], data, size);
+    free(data);
     if (err) {
         fprintf(stderr, "%s: %s\n", argv[i], err);
         return 1;
     }
-    machine_cold_reset(m);
 
     Command *cmds = NULL;
     int ncmds = 0, capcmds = 0;
@@ -386,6 +387,12 @@ int main(int argc, char **argv) {
                 prof_frames = atoi(c->arg);
                 free(prof);
                 prof = calloc(0x10000, sizeof *prof);
+            } else if (strcmp(c->cmd, "load") == 0) {
+                size_t n;
+                uint8_t *data = read_file(c->arg, &n);
+                const char *err = data ? machine_load_file(m, c->arg, data, n) : "cannot read it";
+                if (err) fprintf(stderr, "load %s: %s\n", c->arg, err);
+                free(data);
             } else if (strcmp(c->cmd, "end") == 0) {
                 end = true;
             } else {
@@ -500,7 +507,6 @@ int main(int argc, char **argv) {
         fclose(wav);
     }
     machine_free(m);
-    free(rom);
     free(prof);
     free(cmds);
     free(labels);

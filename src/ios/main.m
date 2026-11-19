@@ -18,6 +18,15 @@
     GameViewController *_game;
 }
 
+// Sorted by name, so the disks of a set go into D1 onwards in order.
+static NSArray<NSURL *> *urls(NSSet<UIOpenURLContext *> *contexts) {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    for (UIOpenURLContext *context in contexts) [urls addObject:context.URL];
+    return [urls sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+        return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
+    }];
+}
+
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
                  options:(UISceneConnectionOptions *)options {
@@ -25,14 +34,12 @@
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.rootViewController = _game;
     [self.window makeKeyAndVisible];
-    // A cartridge opened from the Files app that launched Sally.
-    NSURL *url = options.URLContexts.anyObject.URL;
-    if (url) [_game openURL:url];
+    // Files opened from the Files app that launched Sally.
+    [_game openURLs:urls(options.URLContexts)];
 }
 
 - (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)contexts {
-    NSURL *url = contexts.anyObject.URL;
-    if (url) [_game openURL:url];
+    [_game openURLs:urls(contexts)];
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {

@@ -9,8 +9,9 @@
 
 @interface GameViewController : UIViewController
 
-// Opens a cartridge from the Files app or another app.
-- (void)openURL:(NSURL *)url;
+// Opens a cartridge, XEX or disk, or several disks for D1 onwards, from
+// the Files app or another app.
+- (void)openURLs:(NSArray<NSURL *> *)urls;
 
 // Pauses the machine and lets go of every control while the app is not
 // active.

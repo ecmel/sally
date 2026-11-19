@@ -1,5 +1,5 @@
 // The window's content: a CAMetalLayer the emulator draws into, keyboard
-// input for the Atari, and cartridges dropped onto it.
+// input for the Atari, and files dropped onto it.
 
 #import <AppKit/AppKit.h>
 
@@ -8,8 +8,8 @@
 @interface SallyView : NSView
 
 @property (nonatomic, strong) Emulator *emulator;
-// Called with a file dropped onto the view.
-@property (nonatomic, copy) void (^openFile)(NSURL *url);
+// Called with the files dropped onto the view.
+@property (nonatomic, copy) void (^openFiles)(NSArray<NSURL *> *urls);
 
 // Releases every key, for when the window loses focus.
 - (void)releaseKeys;

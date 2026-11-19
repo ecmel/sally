@@ -309,11 +309,11 @@ footer p { margin: 4px 0; }
     </article>
     <article class="card">
       <h3>Its own little OS</h3>
-      <p>A small built-in OS, written in 6502 assembly and assembled at startup, handles reset, interrupts and the vertical blank. No Atari ROMs needed to run cartridge games.</p>
+      <p>A small built-in OS, written in 6502 assembly and assembled at startup, handles reset, interrupts and the vertical blank. It can run cartridges and standalone Atari executables without an Atari OS ROM.</p>
     </article>
     <article class="card">
       <h3>At home on the Mac</h3>
-      <p>Drop a cartridge on the window or double-click it in Finder. Game controllers work as joysticks, and the last cartridge comes back at the next launch.</p>
+      <p>Drop a cartridge, <code>.xex</code>, <code>.atr</code> or <code>.atx</code> disk or <code>.cas</code> tape on the window or double-click it in Finder. Game controllers work as joysticks, and the last file comes back at the next launch.</p>
     </article>
   </div>
 </section>
@@ -351,7 +351,7 @@ footer p { margin: 4px 0; }
 <pre><code>git clone https://github.com/ecmel/sally.git
 cd sally
 make                           # build/Sally.app
-make run ROM=game.rom          # or drop a cartridge onto the window
+make run ROM=game.xex          # or drop an XEX, disk, tape or cartridge onto the window
 make test                      # CPU tests
 make install                   # copy to /Applications</code></pre>
   <p class="note">Cartridges are plain 8K or 16K images (<code>.rom</code>, <code>.bin</code>) or <code>.car</code> files of those types, or of the bank-switched MegaCart and SIC!. The machine has 128K of RAM, banked as on the 130XE. Sally does not ship with any games.</p>
@@ -359,7 +359,7 @@ make install                   # copy to /Applications</code></pre>
 
 <section class="wrap">
   <h2>Not done yet</h2>
-  <p class="intro">Disk drives and SIO (no <code>.atr</code> or <code>.xex</code>), bank-switched cartridges other than MegaCart and SIC!, paddles, a way to load the BASIC ROM, and the finer GTIA quirks. Only NTSC is emulated.</p>
+  <p class="intro">CIO devices other than <code>C:</code> (and DOS), turbo tapes and writing to tape, bank-switched cartridges other than MegaCart and SIC!, paddles, a way to load the BASIC ROM, and the finer GTIA quirks. Only NTSC is emulated.</p>
 </section>
 
 </main>

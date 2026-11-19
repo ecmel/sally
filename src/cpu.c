@@ -255,7 +255,8 @@ static inline void step(Machine *m) {
     uint16_t ea;
     uint8_t v;
 
-    if (m->clock >= m->pokey.irq_next || m->clock >= m->pokey.serout_at) pokey_sync(m);
+    if (m->clock >= m->pokey.irq_next || m->clock >= m->pokey.serout_at || m->clock >= m->pokey.serin_at)
+        pokey_sync(m);
     // An interrupt is taken if it was raised before the last cycle of the
     // instruction that just ended.
     if (m->nmi && m->nmi_at < m->last_access) {
@@ -271,6 +272,13 @@ static inline void step(Machine *m) {
         idle(m);
         return;
     }
+    if (m->xex_loading && machine_step_xex(m)) return;
+    if (c->pc == SIOV) {
+        int r = machine_sio(m);
+        if (r == SIO_WAIT) idle(m);
+        if (r != SIO_NOT_MINE) return;
+    }
+    if (c->pc == CIOV && machine_cio(m)) return;
 
     uint8_t op = fetch(m);
     switch (op) {

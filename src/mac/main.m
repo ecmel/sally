@@ -1,5 +1,5 @@
 // Sally: an Atari 800 XL emulator. The application: its window and menus,
-// opening cartridges and game controllers.
+// opening files and using game controllers.
 
 #import <AppKit/AppKit.h>
 #import <GameController/GameController.h>
@@ -18,8 +18,15 @@ static NSString *const LastCartridgeKey = @"LastCartridge";
     NSWindow *_window;
     SallyView *_view;
     Emulator *_emulator;
-    NSURL *_pending;  // a file opened before the window exists
+    NSArray<NSURL *> *_pending;  // files opened before the window exists
     BOOL _launched;
+}
+
+// Disks opened together go into D1 onwards in the order of their names.
+static NSArray<NSURL *> *by_name(NSArray<NSURL *> *urls) {
+    return [urls sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+        return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
+    }];
 }
 
 #pragma mark Menus
@@ -52,7 +59,7 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
 
     NSMenu *file = submenu(bar, @"File");
     item(file, @"Open…", @selector(openDocument:), @"o", cmd);
-    item(file, @"Eject", @selector(ejectCartridge:), @"e", cmd);
+    item(file, @"Eject", @selector(ejectFile:), @"e", cmd);
     [file addItem:NSMenuItem.separatorItem];
     item(file, @"Close Window", @selector(performClose:), @"w", cmd);
 
@@ -137,33 +144,33 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
     }
     _view.emulator = _emulator;
     __weak AppDelegate *weakSelf = self;
-    _view.openFile = ^(NSURL *url) {
-        [weakSelf openCartridge:url];
+    _view.openFiles = ^(NSArray<NSURL *> *urls) {
+        [weakSelf openFiles:by_name(urls)];
     };
 
     // `-control ADDRESS` opens the control socket.
     NSArray<NSString *> *args = NSProcessInfo.processInfo.arguments;
-    NSString *file = nil;
+    NSMutableArray<NSURL *> *files = [NSMutableArray array];
     for (NSUInteger i = 1; i < args.count; i++) {
         if ([args[i] isEqualToString:@"-control"] && i + 1 < args.count) {
             NSString *error = [_emulator listenOn:args[++i]];
             if (error) fprintf(stderr, "Sally: control socket: %s\n", error.UTF8String);
-        } else if (![args[i] hasPrefix:@"-"] && !file) {
-            file = args[i];
+        } else if (![args[i] hasPrefix:@"-"]) {
+            [files addObject:[NSURL fileURLWithPath:args[i]]];
         }
     }
-    _emulator.cartridgeChanged = ^(NSURL *url) {
-        [weakSelf showCartridge:url];
+    _emulator.fileChanged = ^(NSURL *url) {
+        [weakSelf showFile:url];
     };
 
-    // A file from the command line, from Finder, or the last one.
-    NSURL *url = _pending;
-    if (!url && file) url = [NSURL fileURLWithPath:file];
-    if (!url) {
+    // Files from the command line, from Finder, or the last one.
+    NSArray<NSURL *> *urls = _pending;
+    if (!urls && files.count) urls = files;
+    if (!urls) {
         NSString *last = [NSUserDefaults.standardUserDefaults stringForKey:LastCartridgeKey];
-        if (last && [NSFileManager.defaultManager fileExistsAtPath:last]) url = [NSURL fileURLWithPath:last];
+        if (last && [NSFileManager.defaultManager fileExistsAtPath:last]) urls = @[ [NSURL fileURLWithPath:last] ];
     }
-    if (url) [self openCartridge:url];
+    if (urls) [self openFiles:urls];
 
     [_window center];
     [_window makeKeyAndOrderFront:nil];
@@ -198,29 +205,31 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
 - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
     if (!urls.count) return;
     if (_launched)
-        [self openCartridge:urls.firstObject];
+        [self openFiles:by_name(urls)];
     else
-        _pending = urls.firstObject;
+        _pending = by_name(urls);
 }
 
-#pragma mark Cartridges
+#pragma mark Files
 
-- (void)openCartridge:(NSURL *)url {
-    NSError *error = nil;
-    NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&error];
-    NSString *message = data ? [_emulator loadCartridge:data] : error.localizedDescription;
+// A cartridge, XEX or disk, or several disks for D1 onwards. A disk opened
+// while one is in D1 takes its place there.
+- (void)openFiles:(NSArray<NSURL *> *)urls {
+    NSString *message = [_emulator loadFiles:urls];
     if (message) {
         NSAlert *alert = [NSAlert new];
-        alert.messageText = [NSString stringWithFormat:@"“%@” cannot be opened.", url.lastPathComponent];
+        alert.messageText = urls.count == 1
+            ? [NSString stringWithFormat:@"“%@” cannot be opened.", urls.firstObject.lastPathComponent]
+            : @"The files cannot be opened.";
         alert.informativeText = message;
         [alert runModal];
         return;
     }
-    [self showCartridge:url];
+    [self showFile:urls.firstObject];
 }
 
-// Shows the cartridge in the window and remembers it, or forgets it (nil).
-- (void)showCartridge:(NSURL *)url {
+// Shows the file in the window and remembers it, or forgets it (nil).
+- (void)showFile:(NSURL *)url {
     if (!url) {
         _window.title = @"Sally";
         _window.representedURL = nil;
@@ -242,17 +251,20 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.allowedContentTypes = @[
         [UTType typeWithFilenameExtension:@"rom"], [UTType typeWithFilenameExtension:@"car"],
-        [UTType typeWithFilenameExtension:@"bin"]
+        [UTType typeWithFilenameExtension:@"bin"], [UTType typeWithFilenameExtension:@"xex"],
+        [UTType typeWithFilenameExtension:@"atr"], [UTType typeWithFilenameExtension:@"atx"],
+        [UTType typeWithFilenameExtension:@"cas"]
     ];
+    panel.allowsMultipleSelection = YES;
     [panel beginSheetModalForWindow:_window
                   completionHandler:^(NSModalResponse result) {
-                      if (result == NSModalResponseOK) [self openCartridge:panel.URL];
+                      if (result == NSModalResponseOK) [self openFiles:by_name(panel.URLs)];
                   }];
 }
 
-- (void)ejectCartridge:(id)sender {
-    [_emulator ejectCartridge];
-    [self showCartridge:nil];
+- (void)ejectFile:(id)sender {
+    [_emulator ejectFile];
+    [self showFile:nil];
 }
 
 #pragma mark Machine
@@ -345,15 +357,16 @@ static NSMenu *submenu(NSMenu *bar, NSString *title) {
 
 @end
 
-// `-headless -control ADDRESS [FILE]`: no window, no sound, no Dock icon;
+// `-headless -control ADDRESS [FILE...]`: no window, no sound, no Dock icon;
 // the machine answers the control socket on the main thread.
 static int run_headless(int argc, const char *argv[]) {
-    const char *address = NULL, *file = NULL;
+    const char *address = NULL;
+    NSMutableArray<NSURL *> *files = [NSMutableArray array];
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-control") && i + 1 < argc)
             address = argv[++i];
-        else if (argv[i][0] != '-' && !file)
-            file = argv[i];
+        else if (argv[i][0] != '-')
+            [files addObject:[NSURL fileURLWithPath:@(argv[i])]];
     }
     if (!address) {
         fprintf(stderr, "Sally: -headless needs -control ADDRESS\n");
@@ -377,12 +390,10 @@ static int run_headless(int argc, const char *argv[]) {
         fprintf(stderr, "Sally: control socket: %s\n", error.UTF8String);
         return 1;
     }
-    if (file) {
-        NSError *readError = nil;
-        NSData *data = [NSData dataWithContentsOfFile:@(file) options:0 error:&readError];
-        NSString *message = data ? [emulator loadCartridge:data] : readError.localizedDescription;
+    if (files.count) {
+        NSString *message = [emulator loadFiles:files];
         if (message) {
-            fprintf(stderr, "Sally: %s: %s\n", file, message.UTF8String);
+            fprintf(stderr, "Sally: %s: %s\n", files.firstObject.path.UTF8String, message.UTF8String);
             return 1;
         }
     }

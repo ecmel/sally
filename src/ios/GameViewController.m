@@ -13,9 +13,8 @@ static NSURL *documents(void) {
     return [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
 }
 
-static BOOL is_cartridge(NSURL *url) {
-    NSString *ext = url.pathExtension.lowercaseString;
-    return [ext isEqualToString:@"rom"] || [ext isEqualToString:@"car"] || [ext isEqualToString:@"bin"];
+static NSArray<NSString *> *file_extensions(void) {
+    return @[ @"rom", @"car", @"bin", @"xex", @"atr", @"atx", @"cas" ];
 }
 
 // The Metal layer the emulator draws into, sized in physical pixels so the
@@ -53,7 +52,7 @@ static BOOL is_cartridge(NSURL *url) {
     ScreenView *_screen;
     TouchControls *_controls;
     Emulator *_emulator;
-    NSString *_cartridge;  // the file name in Documents, or nil
+    NSString *_file;  // the file name in Documents, or nil
     BOOL _userPaused;
     BOOL _started;
     NSString *_pendingError;  // shown once the view is on screen
@@ -100,7 +99,7 @@ static BOOL is_cartridge(NSURL *url) {
     ]];
 
     NSString *last = [NSUserDefaults.standardUserDefaults stringForKey:LastCartridgeKey];
-    if (last) [self openCartridgeNamed:last];
+    if (last) [self openFileNamed:last];
 
     for (NSNotificationName name in @[ GCControllerDidConnectNotification, GCControllerDidDisconnectNotification ])
         [NSNotificationCenter.defaultCenter addObserver:self
@@ -182,83 +181,98 @@ static BOOL is_cartridge(NSURL *url) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-#pragma mark Cartridges
+#pragma mark Files
 
-- (NSArray<NSURL *> *)cartridges {
+- (NSArray<NSURL *> *)libraryFiles {
     NSArray<NSURL *> *urls = [NSFileManager.defaultManager contentsOfDirectoryAtURL:documents()
                                                          includingPropertiesForKeys:nil
                                                                             options:NSDirectoryEnumerationSkipsHiddenFiles
                                                                               error:nil];
+    NSArray<NSString *> *extensions = file_extensions();
     urls = [urls filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSURL *url, NSDictionary *bindings) {
-                     return is_cartridge(url);
+                     return [extensions containsObject:url.pathExtension.lowercaseString];
                  }]];
     return [urls sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
         return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
     }];
 }
 
-// Loads `data` and remembers it as `name`. Returns NO after showing why
-// it failed.
-- (BOOL)loadData:(NSData *)data name:(NSString *)name {
-    NSString *message = [_emulator loadCartridge:data];
+// Opens files of the library, which a disk's writes go back to, and
+// remembers the first. Returns NO after showing why it failed.
+- (BOOL)openNames:(NSArray<NSString *> *)names {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    for (NSString *name in names) [urls addObject:[documents() URLByAppendingPathComponent:name]];
+    NSString *message = [_emulator loadFiles:urls];
     if (message) {
-        [self showError:message title:[NSString stringWithFormat:@"“%@” cannot be opened.", name]];
+        NSString *title = names.count == 1 ? [NSString stringWithFormat:@"“%@” cannot be opened.", names.firstObject]
+                                           : @"The files cannot be opened.";
+        [self showError:message title:title];
         return NO;
     }
-    _cartridge = name;
-    [NSUserDefaults.standardUserDefaults setObject:name forKey:LastCartridgeKey];
+    _file = names.firstObject;
+    [NSUserDefaults.standardUserDefaults setObject:_file forKey:LastCartridgeKey];
     return YES;
 }
 
-- (void)openCartridgeNamed:(NSString *)name {
-    NSURL *url = [documents() URLByAppendingPathComponent:name];
-    NSData *data = [NSData dataWithContentsOfURL:url];
-    if (!data) {
+- (void)openFileNamed:(NSString *)name {
+    if (![NSFileManager.defaultManager fileExistsAtPath:[documents() URLByAppendingPathComponent:name].path]) {
         // Deleted in the Files app since.
         [NSUserDefaults.standardUserDefaults removeObjectForKey:LastCartridgeKey];
         return;
     }
-    [self loadData:data name:name];
+    [self openNames:@[ name ]];
 }
 
-- (void)openURL:(NSURL *)url {
+// Copies the files into the library, unless they are already there, and
+// opens the copies. Copies of files that fail to open are removed.
+- (void)openURLs:(NSArray<NSURL *> *)urls {
     [self loadViewIfNeeded];
-    if (!_emulator) return;
-    BOOL scoped = [url startAccessingSecurityScopedResource];
-    NSError *error = nil;
-    NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&error];
-    if (scoped) [url stopAccessingSecurityScopedResource];
-    NSString *name = url.lastPathComponent;
-    if (!data) {
-        [self showError:error.localizedDescription title:[NSString stringWithFormat:@"“%@” cannot be opened.", name]];
-        return;
+    if (!_emulator || !urls.count) return;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSMutableArray<NSURL *> *copies = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        NSString *name = url.lastPathComponent;
+        NSURL *copy = [documents() URLByAppendingPathComponent:name];
+        [names addObject:name];
+        if ([copy.URLByResolvingSymlinksInPath isEqual:url.URLByResolvingSymlinksInPath]) continue;
+        BOOL scoped = [url startAccessingSecurityScopedResource];
+        NSError *error = nil;
+        NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&error];
+        if (scoped) [url stopAccessingSecurityScopedResource];
+        BOOL existed = [NSFileManager.defaultManager fileExistsAtPath:copy.path];
+        if (!data || ![data writeToURL:copy options:NSDataWritingAtomic error:&error]) {
+            for (NSURL *c in copies) [NSFileManager.defaultManager removeItemAtURL:c error:nil];
+            [self showError:error.localizedDescription title:[NSString stringWithFormat:@"“%@” cannot be opened.", name]];
+            return;
+        }
+        if (!existed) [copies addObject:copy];
     }
-    if (![self loadData:data name:name]) return;
-    // Keep a copy, unless this is already one.
-    NSURL *copy = [documents() URLByAppendingPathComponent:name];
-    if (![copy.URLByResolvingSymlinksInPath isEqual:url.URLByResolvingSymlinksInPath])
-        [data writeToURL:copy options:NSDataWritingAtomic error:nil];
+    if (![self openNames:names])
+        for (NSURL *c in copies) [NSFileManager.defaultManager removeItemAtURL:c error:nil];
 }
 
-- (void)importCartridge {
+- (void)importFile {
     NSMutableArray<UTType *> *types = [NSMutableArray array];
-    for (NSString *ext in @[ @"rom", @"car", @"bin" ]) {
+    for (NSString *ext in file_extensions()) {
         UTType *type = [UTType typeWithFilenameExtension:ext];
         if (type) [types addObject:type];
     }
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types
                                                                                                          asCopy:YES];
+    picker.allowsMultipleSelection = YES;
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (urls.count) [self openURL:urls.firstObject];
+    [self openURLs:[urls sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+              return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
+          }]];
 }
 
-- (void)ejectCartridge {
-    [_emulator ejectCartridge];
-    _cartridge = nil;
+- (void)ejectFile {
+    [_emulator ejectFile];
+    _file = nil;
     [NSUserDefaults.standardUserDefaults removeObjectForKey:LastCartridgeKey];
 }
 
@@ -266,37 +280,37 @@ static BOOL is_cartridge(NSURL *url) {
 
 - (NSArray<UIMenuElement *> *)menuElements {
     __weak GameViewController *weakSelf = self;
-    NSMutableArray<UIMenuElement *> *carts = [NSMutableArray array];
-    for (NSURL *url in self.cartridges) {
+    NSMutableArray<UIMenuElement *> *files = [NSMutableArray array];
+    for (NSURL *url in self.libraryFiles) {
         NSString *name = url.lastPathComponent;
         UIAction *action = [UIAction actionWithTitle:url.URLByDeletingPathExtension.lastPathComponent
                                                image:nil
                                           identifier:nil
                                              handler:^(UIAction *a) {
-                                                 [weakSelf openCartridgeNamed:name];
+                                                 [weakSelf openFileNamed:name];
                                              }];
-        if ([name isEqualToString:_cartridge]) action.state = UIMenuElementStateOn;
-        [carts addObject:action];
+        if ([name isEqualToString:_file]) action.state = UIMenuElementStateOn;
+        [files addObject:action];
     }
-    UIMenu *library = [UIMenu menuWithTitle:@"Cartridges"
+    UIMenu *library = [UIMenu menuWithTitle:@"Library"
                                       image:nil
                                  identifier:nil
                                     options:UIMenuOptionsDisplayInline
-                                   children:carts];
+                                   children:files];
 
-    UIAction *import = [UIAction actionWithTitle:@"Import Cartridge…"
+    UIAction *import = [UIAction actionWithTitle:@"Import File…"
                                            image:[UIImage systemImageNamed:@"folder"]
                                       identifier:nil
                                          handler:^(UIAction *a) {
-                                             [weakSelf importCartridge];
+                                             [weakSelf importFile];
                                          }];
     UIAction *eject = [UIAction actionWithTitle:@"Eject"
                                           image:[UIImage systemImageNamed:@"eject"]
                                      identifier:nil
                                         handler:^(UIAction *a) {
-                                            [weakSelf ejectCartridge];
+                                            [weakSelf ejectFile];
                                         }];
-    if (!_cartridge) eject.attributes = UIMenuElementAttributesDisabled;
+    if (!_file) eject.attributes = UIMenuElementAttributesDisabled;
     UIMenu *file = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[
         import, eject
     ]];

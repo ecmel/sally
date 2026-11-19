@@ -1,5 +1,6 @@
 // POKEY: four sound channels, their timer interrupts, the keyboard, the
-// random number generator and enough of the serial port for the OS.
+// random number generator and the serial port, which bytes go out of and
+// come in to at the rates of the bus (see machine_serout).
 //
 // Sound is event driven. Each channel's divider runs out at a known cycle;
 // between those events the output level is constant, so it is integrated
@@ -131,6 +132,7 @@ void pokey_sync(Machine *m) {
             for (int ch = 0; ch < 4; ch++)
                 if (p->next[ch] < te) te = p->next[ch];
         if (p->serout_at < te) te = p->serout_at;
+        if (p->serin_at < te) te = p->serin_at;
         integrate(p, te);
         p->t = te;
         if (running(p))
@@ -141,6 +143,11 @@ void pokey_sync(Machine *m) {
             // is empty.
             p->serout_at = ~(uint64_t)0;
             p->irqst &= ~(p->irqen & 0x18);
+        }
+        if (p->serin_at == te) {
+            // A byte has come in.
+            p->serin = machine_serin(m);
+            p->irqst &= ~(p->irqen & 0x20);
         }
         update_level(m);
     }
@@ -161,6 +168,7 @@ void pokey_reset(Machine *m) {
     p->t = m->clock;
     p->sample_next = (double)m->clock + cps;
     p->serout_at = ~(uint64_t)0;
+    p->serin_at = ~(uint64_t)0;
     p->irq_next = ~(uint64_t)0;
 }
 
@@ -183,11 +191,15 @@ uint8_t pokey_read(Machine *m, uint8_t reg) {
         for (int i = 0; i < 8; i++) v = v << 1 | (nine ? poly9[(t + i) % 511] : poly17[(t + i) % 131071]);
         return v;
     }
-    case 0x0D: return 0xFF;  // SERIN
+    case 0x0D:  // SERIN
+        pokey_sync(m);
+        return p->serin;
     case 0x0E:
         pokey_sync(m);
         return p->irqst;
-    case 0x0F: return 0xFF & ~(p->key_down ? 0x04 : 0) & ~(p->shift_down ? 0x08 : 0);
+    case 0x0F:  // SKSTAT: bit 4 is the serial input line
+        return 0xFF & ~(p->key_down ? 0x04 : 0) & ~(p->shift_down ? 0x08 : 0) &
+               ~(machine_serial_line(m) ? 0 : 0x10);
     default: return reg < 8 ? 228 : 0xFF;  // paddles at rest
     }
 }
@@ -202,6 +214,7 @@ void pokey_write(Machine *m, uint8_t reg, uint8_t v) {
     case 0x09: restart_counters(m); break;  // STIMER
     case 0x0D:                              // SEROUT: ten bits at the channel 4 rate
         p->serout_at = m->clock + 20 * period(p, 3);
+        machine_serout(m, v);
         break;
     case 0x0E:
         p->irqen = v;

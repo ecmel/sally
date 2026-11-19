@@ -186,8 +186,8 @@ static const uint32_t CommandHelp = 8;
     NSArray<NSURL *> *urls =
         [sender.draggingPasteboard readObjectsForClasses:@[ NSURL.class ]
                                                  options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
-    if (!urls.count || !self.openFile) return NO;
-    self.openFile(urls.firstObject);
+    if (!urls.count || !self.openFiles) return NO;
+    self.openFiles(urls);
     return YES;
 }
 

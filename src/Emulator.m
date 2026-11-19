@@ -6,6 +6,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #import "Audio.h"
 #include "control.h"
@@ -17,7 +18,7 @@ static const double PIXEL_ASPECT = 1.714;
 static NSString *const shader_source =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
-     "struct Params { uint2 origin; uint clock; uint line; uint top; };\n"
+     "struct Params { uint2 origin; uint clock; uint line; uint top; uint width; uint leds; };\n"
      "vertex float4 vertex_main(uint id [[vertex_id]]) {\n"
      "    float2 p = float2((id << 1) & 2, id & 2);\n"
      "    return float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);\n"
@@ -30,7 +31,17 @@ static NSString *const shader_source =
      "    uint x = min(q.x * 2 / p.clock, 383u);\n"
      "    uint y = min(q.y / p.line + p.top, 239u);\n"
      "    uint rgb = palette[frame[y * 384 + x]];\n"
-     "    return half4(half((rgb >> 16) & 255), half((rgb >> 8) & 255), half(rgb & 255), 255.0h) / 255.0h;\n"
+     "    half4 c = half4(half((rgb >> 16) & 255), half((rgb >> 8) & 255), half(rgb & 255), 255.0h) / 255.0h;\n"
+     "    // Busy lights in the top right corner: D1 rightmost, the cassette\n"
+     "    // leftmost.\n"
+     "    float r = 1.5 * p.clock;\n"
+     "    for (uint i = 0; i < 5; i++) {\n"
+     "        if (!(p.leds & (1u << i))) continue;\n"
+     "        float2 centre = float2(p.width - (5.0 + 5.0 * i) * p.clock, 5.0 * p.line);\n"
+     "        float d = distance(float2(q) + 0.5, centre);\n"
+     "        c = mix(c, half4(1.0h, 0.12h, 0.08h, 1.0h), half(saturate(r - d)));\n"
+     "    }\n"
+     "    return c;\n"
      "}\n";
 
 static void control_line(void *ctx, ControlClient *client, char *text);
@@ -59,6 +70,8 @@ typedef struct {
     uint32_t origin[2];
     uint32_t clock, line;
     uint32_t top;  // first frame buffer row shown
+    uint32_t width;  // of the picture, in pixels
+    uint32_t leds;   // busy drives, a bit for each of D1-D4 and the cassette
 } Params;
 
 // Decides how many Atari frames to run for each display refresh.
@@ -475,7 +488,7 @@ static int pacer_frames(Pacer *p, double t, double hz) {
     int clock, line;
     [Emulator scaleForSize:CGSizeMake(pw, ph) clock:&clock line:&line];
     int w = MIN(FRAME_CLOCKS * clock, pw), h = MIN(VIEW_HEIGHT * line, ph);
-    Params params = {{(pw - w) / 2, (ph - h) / 2}, clock, line, VIEW_TOP};
+    Params params = {{(pw - w) / 2, (ph - h) / 2}, clock, line, VIEW_TOP, w, machine_disk_activity(_m)};
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
@@ -502,18 +515,39 @@ static int pacer_frames(Pacer *p, double t, double hz) {
 
 #pragma mark Commands
 
-- (NSString *)loadCartridge:(NSData *)data {
-    __block const char *err = NULL;
+- (NSString *)loadFiles:(NSArray<NSURL *> *)urls {
+    __block NSString *err = nil;
     [self perform:^{
-        err = machine_load_cart(self->_m, data.bytes, data.length);
-        if (!err) machine_cold_reset(self->_m);
+        err = [self openURLs:urls];
     } wait:YES];
+    return err;
+}
+
+// Reads and opens the files, on the emulation thread.
+- (NSString *)openURLs:(NSArray<NSURL *> *)urls {
+    int n = (int)urls.count;
+    if (n < 1) return @"No files.";
+    if (n > DRIVES) return @"Sally has four disk drives.";
+    NSData *files[DRIVES];
+    const char *paths[DRIVES];
+    const uint8_t *data[DRIVES];
+    size_t sizes[DRIVES];
+    for (int i = 0; i < n; i++) {
+        NSError *error = nil;
+        files[i] = [NSData dataWithContentsOfURL:urls[i] options:0 error:&error];
+        if (!files[i]) return error.localizedDescription;
+        paths[i] = urls[i].fileSystemRepresentation;
+        data[i] = files[i].bytes;
+        sizes[i] = files[i].length;
+    }
+    const char *err = n == 1 ? machine_load_file(_m, paths[0], data[0], sizes[0])
+                             : machine_load_disks(_m, n, paths, data, sizes);
     return err ? @(err) : nil;
 }
 
-- (void)ejectCartridge {
+- (void)ejectFile {
     [self perform:^{
-        machine_eject_cart(self->_m);
+        machine_eject_file(self->_m);
         machine_cold_reset(self->_m);
     } wait:NO];
 }
@@ -620,6 +654,31 @@ static bool parse_peek(const char *s, int *addr, int *count) {
     return true;
 }
 
+// The paths of `load`: one file, or several separated by spaces, each in
+// double quotes if it has a space. Returns nil for a missing quote.
+static NSArray<NSURL *> *load_paths(const char *arg) {
+    if (*arg != '"' && access(arg, F_OK) == 0) return @[ [NSURL fileURLWithPath:@(arg)] ];
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    const char *p = arg;
+    while (*p) {
+        const char *start = p, *end;
+        if (*p == '"') {
+            start = ++p;
+            end = strchr(p, '"');
+            if (!end) return nil;
+            p = end + 1;
+        } else {
+            end = strchr(p, ' ');
+            if (!end) end = p + strlen(p);
+            p = end;
+        }
+        NSString *path = [[NSString alloc] initWithBytes:start length:end - start encoding:NSUTF8StringEncoding];
+        if (path.length) [urls addObject:[NSURL fileURLWithPath:path]];
+        while (*p == ' ') p++;
+    }
+    return urls;
+}
+
 // A frame count for `step`, 1-100000 in decimal.
 static bool parse_count(const char *s, int *count) {
     char *end;
@@ -673,20 +732,17 @@ static bool parse_count(const char *s, int *count) {
     } else if (!strcmp(cmd, "pause") && parse_flag(arg, &on)) {
         self.paused = on;
     } else if (!strcmp(cmd, "load") && *arg) {
-        NSURL *url = [NSURL fileURLWithPath:@(arg)];
-        NSError *error = nil;
-        NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&error];
-        const char *err = data ? machine_load_cart(m, data.bytes, data.length) : error.localizedDescription.UTF8String;
+        NSArray<NSURL *> *urls = load_paths(arg);
+        NSString *err = urls ? [self openURLs:urls] : @"bad quoting";
         if (err) {
-            control_printf(client, "error %s\n", err);
+            control_printf(client, "error %s\n", err.UTF8String);
             return;
         }
-        machine_cold_reset(m);
-        [self notifyCartridge:url];
+        [self notifyFile:urls.firstObject];
     } else if (!strcmp(cmd, "eject") && !*arg) {
-        machine_eject_cart(m);
+        machine_eject_file(m);
         machine_cold_reset(m);
-        [self notifyCartridge:nil];
+        [self notifyFile:nil];
     } else if (!strcmp(cmd, "frame") && !*arg) {
         size_t n = encode_lines(m, _lines);
         control_printf(client, "frame %llu %d %zu\n", _frameCount, FRAME_HEIGHT, n);
@@ -711,7 +767,9 @@ static bool parse_count(const char *s, int *count) {
         control_send(client, rgb, sizeof rgb);
         return;
     } else if (!strcmp(cmd, "status") && !*arg) {
-        control_printf(client, "status frame %llu paused %d cart %d\n", _frameCount, self.paused, m->cart != NULL);
+        control_printf(client, "status frame %llu paused %d cart %d disks %d%d%d%d\n", _frameCount, self.paused,
+                       m->cart != NULL, m->disk[0].data != NULL, m->disk[1].data != NULL, m->disk[2].data != NULL,
+                       m->disk[3].data != NULL);
         return;
     } else if (!strcmp(cmd, "peek") && parse_peek(arg, &addr, &count)) {
         char reply[16 + 256 * 3];
@@ -730,10 +788,10 @@ static bool parse_count(const char *s, int *count) {
     control_printf(client, "ok\n");
 }
 
-- (void)notifyCartridge:(NSURL *)url {
-    if (!self.cartridgeChanged) return;
+- (void)notifyFile:(NSURL *)url {
+    if (!self.fileChanged) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.cartridgeChanged) self.cartridgeChanged(url);
+        if (self.fileChanged) self.fileChanged(url);
     });
 }
 

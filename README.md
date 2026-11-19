@@ -12,8 +12,8 @@ machine.
 
 ```sh
 make                          # build/Sally.app
-make run ROM=game.rom         # or drop a cartridge onto the window
-make test                     # CPU tests (downloads Klaus Dormann's test binary)
+make run ROM=game.xex         # or drop an XEX, disk, tape or cartridge onto the window
+make test                     # CPU, XEX, disk and tape tests (downloads Klaus Dormann's test binary)
 make tools                    # build/sallyrun, a headless runner
 make install                  # copy to /Applications (INSTALL_DIR=... for elsewhere)
 ```
@@ -28,15 +28,50 @@ Releases are built for Apple silicon only.
 
 Requires macOS 14 and the Xcode command line tools. Cartridges are plain
 8K or 16K images (`.rom`, `.bin`) or `.car` files of those types, or of
-the bank-switched MegaCart (16K to 1M) and SIC! (128K to 512K). The last
-cartridge opened comes back at the next launch.
+the bank-switched MegaCart (16K to 1M) and SIC! (128K to 512K). Sally also
+runs standalone Atari executables (`.xex`). Reset and Power Cycle reload
+the executable from the beginning. The last file opened comes back at
+the next launch.
+
+Disk images (`.atr`, single, enhanced or double density) go into four
+drives, D1 to D4. Opening one puts it in D1 and boots it. Opening another
+while a disk is in D1 swaps it in without a reset, for the next disk or
+side of a game when it asks; Power Cycle then boots from it. Opening
+several disks at once (in the Open panel, or dropped together) fills D1
+onwards in the order of their names and boots D1. Opening a cartridge or
+XEX ejects the disks. Reset boots D1 again. Writes go straight back to
+the image file, unless the image's header marks it write protected (bit
+0 of byte 15, as APE sets it) or the file cannot be written.
+
+ATX images (`.atx`) keep a disk as it was recorded, copy protection
+included: each track's sectors with their place on the track, the
+controller's errors (CRC errors, lost data, missing sectors), duplicate
+sectors and weak bits. They are read as the disk turns, at 288 rpm with
+the head stepping between tracks, so a read takes as long as on the
+drive and which copy of a duplicate sector comes back depends on when it
+is asked for; the drive's status shows the controller's last status.
+They load as fast as a real drive, much slower than ATR, and are write
+protected.
+
+Cassette images (`.cas`) go into the recorder. Opening one boots it, as
+power on with START held does: the OS loads the boot records, and the
+program can read more through SIOV, open the next file on the tape as
+`C:` through CIO, or play the tape into POKEY's serial input by running
+the motor, with the gaps and baud rates of the image.
+Opening another while a tape is in swaps it in, rewound, without a reset.
+Power Cycle and Reset boot the tape again from the start. Tapes are read
+only, and the turbo formats (`fsk` and `pwm` chunks) are not supported.
+
+While a drive or the recorder is at work, its busy light shows in the
+top right corner of the picture: a red dot for each drive, D1 rightmost,
+and one for the recorder left of them.
 
 The machine has 128K of RAM: the 800 XL's 64K and 64K more, banked into
 `$4000-$7FFF` through PORTB as on the 130XE, with separate CPU and ANTIC
 access. Games that need 128K, like the Prince of Persia port, run.
 
 `make install` registers the installed app with Launch Services, so Finder
-opens `.rom` and `.car` files in Sally and shows them with a Sally document
+opens `.rom`, `.car`, `.xex`, `.atr`, `.atx` and `.cas` files in Sally and shows them with a document
 icon. `.bin` files list Sally under Open With, without making it their
 default.
 
@@ -58,10 +93,12 @@ make ios-open                                 # open the project in Xcode
 `xcrun devicectl list devices` lists device names. The device must be
 registered with the development team in `project.yml`.
 
-Cartridges live in Sally's folder in the Files app: copy them there, open
-one from Files or another app, or use Import Cartridge in the menu (the
-button in the top left corner), which also lists them all. The last
-cartridge opened comes back at the next launch.
+Cartridges, XEX files, disks and tapes live in Sally's folder in the Files app.
+Copy them there, open one from Files or another app, or use Import File in
+the menu (the button in the top left corner), which also lists them all
+and can import several disks at once. Disks behave as on the Mac, and
+their writes go to the copy in Sally's folder. The last file opened comes
+back at the next launch.
 
 On screen, a touch anywhere on the left half of the screen holds fire,
 and a touch anywhere on the right half steers the joystick toward it
@@ -78,7 +115,18 @@ the background.
 Sally runs a small built-in OS (`src/os.c`) in place of the Atari OS ROM:
 the reset sequence, interrupt dispatch through the OS vectors, the vertical
 blank with its shadow registers and timers, and a stand-in character set.
-That covers cartridge games that drive the hardware themselves.
+That covers cartridges and XEX programs that drive the hardware themselves.
+With a disk in D1 it boots from it as the Atari OS does, and DSKINV and
+SIOV reach the drives, which the machine answers directly. With START
+held at power on it boots from the cassette, through SIOV too, and CIO
+opens the cassette as `C:` for reading, also answered by the machine;
+CIO has no other devices. Programs with
+their own serial routines reach the same drives over an emulated serial
+bus: command frames through POKEY's serial output under the command line,
+replies through serial input and its interrupt. Boot disks of games work,
+copy protected ones too as ATX images; Atari DOS does not, since there is
+no screen editor or disk handler. Some XEX programs require DOS or
+additional OS services.
 
 ## Controls
 
@@ -145,9 +193,9 @@ two frames.
 | `reset`             | RESET                                                        |
 | `power`             | Power cycle                                                  |
 | `pause 0` / `1`     | Pauses or resumes                                            |
-| `load PATH`         | Opens a cartridge (an absolute path is safest; a relative one goes from Sally's working directory) |
-| `eject`             | Removes the cartridge                                        |
-| `status`            | Replies `status frame N paused P cart C`                     |
+| `load PATH...`      | Opens a cartridge, XEX, disk or tape, or several disks for D1 onwards, as opening files does (relative paths use Sally's working directory; a path with spaces among several goes in double quotes) |
+| `eject`             | Removes the current cartridge, XEX or tape and all disks     |
+| `status`            | Replies `status frame N paused P cart C disks DDDD`, a digit for each of D1-D4 (1 when it holds a disk) |
 | `step N`            | Runs N frames (decimal) at once, paused or not, then replies `ok` |
 | `peek ADDR [N]`     | Replies `peek ADDR` and N bytes (hex, default 1, at most 100) of memory as the CPU sees it; I/O reads `FF` |
 | `quit`              | Replies `ok` and exits                                       |
@@ -209,10 +257,11 @@ share in `src/`, the Mac's in `src/mac` and iOS's in `src/ios`.
 - `pokey.c`: event-driven sound. Each channel's divider runs out at a known
   cycle; the output level between those events is integrated over each
   audio sample. Also the timers and their interrupts, keyboard, RANDOM and
-  enough serial output for the OS.
+  the serial port.
 - `machine.c`: the XL memory map (PORTB banking of the OS, BASIC and self
   test ROMs and the 130XE's extra RAM), the PIA, cartridges with their
-  bank switching, and resets.
+  bank switching, XEX loading, the disk drives and their SIO commands
+  (through SIOV or the serial bus), the cassette recorder, and resets.
 - `os.c` and `asm6502.c`: the built-in OS, written in 6502 assembly and
   assembled at startup by a small two-pass assembler.
 
@@ -235,7 +284,7 @@ The frontend:
 - `mac/SallyView.m`, `mac/Keyboard.m`, `mac/main.m`: the window, keyboard
   mapping, menus, drag and drop, game controllers.
 - `ios/GameViewController.m`, `ios/TouchControls.m`, `ios/main.m`: the
-  screen, the on-screen controls, the cartridge library and menu, game
+  screen, the on-screen controls, the file library and menu, game
   controllers and a hardware keyboard.
 - `control.c`: the control socket. The emulation thread polls it from a
   60 Hz timer and runs its commands between frames, so the socket touches
@@ -251,13 +300,16 @@ frames emulated, missed refreshes, time per update and audio buffer level.
 
 ## Checking
 
-- `make test`: cycle counts of all 256 opcodes against the NMOS table, and
-  Klaus Dormann's functional test.
-- `build/sallyrun [-l LABELS] ROM SCRIPT`: runs a cartridge headless and
+- `make test`: NMOS opcode cycle counts, Klaus Dormann's functional test,
+  XEX loading with ordered initialization, RAM banking and resets, and
+  disk boot, sector reads and writes, swapping and write protection, the
+  serial bus, ATX sectors read as the disk turns (duplicates, errors,
+  missing and weak sectors), and cassette boot, reads and playback.
+- `build/sallyrun [-l LABELS] FILE SCRIPT`: runs a cartridge, XEX, disk or tape headless and
   saves screenshots, with the same script commands as the retro-ports
   harness (`stick`, `fire`, `consol`, `key`, `shot`), so its frames can be
   compared with that harness's reference emulator. It also helps debug a
-  cartridge: `regs`, `peek`, `poke`, breakpoints (`bp`), memory watches
+  program: `regs`, `peek`, `poke`, breakpoints (`bp`), memory watches
   (`watch`), a profile of CPU cycles by routine (`prof`), a log of the
   sound registers (`pokeylog`) and a WAV of the sound (`wav`). With an ld65
   or VICE label file (`-l`), addresses can be names and are printed as
@@ -265,7 +317,7 @@ frames emulated, missed refreshes, time per update and audio buffer level.
 
 ## Not done yet
 
-Disk drives and SIO (no `.atr` or `.xex`), bank-switched cartridges
+CIO devices other than `C:` (and DOS), turbo tapes and writing to tape, bank-switched cartridges
 other than MegaCart and SIC! (and flash writes on those), paddles, a way
 to load the BASIC ROM, and the finer GTIA quirks (player retriggering when
 HPOS changes mid-object). Only NTSC is emulated.

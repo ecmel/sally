@@ -1,6 +1,7 @@
 // Atari 800 XL: a 6502C ("Sally") with ANTIC, GTIA, POKEY and a PIA, 64K
-// of RAM and 64K more banked as on the 130XE, the OS ROM and an optional
-// cartridge: standard 8K or 16K, MegaCart or SIC!.
+// of RAM and 64K more banked as on the 130XE, the OS ROM, an optional
+// cartridge (standard 8K or 16K, MegaCart or SIC!), four disk drives and
+// a cassette recorder.
 //
 // Time is counted in CPU cycles. A scanline is 114 cycles, an NTSC frame
 // 262 lines. ANTIC takes cycles from the CPU for its DMA; `dma` marks them
@@ -33,6 +34,14 @@ enum {
 
 // Cartridge banking schemes.
 enum { CART_STANDARD, CART_MEGACART, CART_SIC };
+
+// Disk drives, D1-D4. Calls to SIOV are answered by the machine itself,
+// at once; programs with their own serial routines reach the drives over
+// the serial bus (see `Sio`).
+enum { DRIVES = 4, SIOV = 0xE459 };
+
+// CIO, which the built-in OS leaves to the machine: only the cassette.
+enum { CIOV = 0xE456 };
 
 #define CPU_HZ 1789772.5
 
@@ -83,6 +92,8 @@ typedef struct Pokey {
     uint64_t t;            // cycles synthesized so far
     uint64_t irq_next;     // cycle of the next timer interrupt, or ~0
     uint64_t serout_at;    // cycle the serial output byte is sent, or ~0
+    uint64_t serin_at;     // cycle the next serial input byte arrives, or ~0
+    uint8_t serin;         // the last byte received
     int level;             // summed channel volumes right now
     double sample_next;    // cycle of the next audio sample boundary
     double cps;            // cycles per audio sample
@@ -96,6 +107,92 @@ typedef struct Pokey {
 typedef struct Pia {
     uint8_t ora, ddra, pactl, orb, ddrb, pbctl;
 } Pia;
+
+// A sector of an ATX image as the drive finds it on its track: the
+// number in its header, the controller's status reading it (non-zero for
+// the errors copy protection depends on), where it passes under the head
+// and its data.
+typedef struct AtxSector {
+    uint8_t number, status;
+    uint16_t pos;     // in 8 us units after the index hole, of 26042 a turn
+    uint32_t data;    // offset of its data in the file, 0 for none
+    int weak;         // offset in the sector where weak bits start, or -1
+} AtxSector;
+
+enum { ATX_TRACKS = 40 };
+
+// A disk image in a drive: the sectors of its ATR file or, from an ATX
+// file, its tracks as they were recorded, which are read as the disk
+// turns. On a double density disk, sectors 1-3 are 128 bytes; most ATR
+// images store them so, some in 256-byte slots (`padded`).
+typedef struct Disk {
+    uint8_t *data;    // the sectors (the whole file for ATX), or NULL for an empty drive
+    size_t size;
+    int sector_size;  // 128, 256 or 512
+    int sectors;
+    bool padded;
+    bool protect;     // write protected
+    int fd;           // the file writes go to, or -1 to keep them in memory
+    AtxSector *atx;   // ATX: every track's sectors, or NULL for ATR
+    int track[ATX_TRACKS + 1];  // ATX: the first of each track's sectors in `atx`
+    int spt;          // ATX: sectors a track
+    int head;         // ATX: the track under the head
+    uint8_t fdc;      // ATX: the controller's status after the last command
+} Disk;
+
+// The disk drives' side of the serial bus. A command frame comes in while
+// the command line is low; the drive answers with ACK (or NAK), takes the
+// data frame of a write, then sends COMPLETE (or ERROR) and any data.
+typedef struct Sio {
+    bool command;      // the command line is asserted
+    uint8_t in[520];   // the frame coming in
+    int nin;
+    int want;          // bytes of the data frame awaited (with checksum), or 0
+    uint8_t cmd[4];    // the write command it belongs to
+    int drive;         // the drive answering, 0-3
+    uint8_t out[520];  // the reply
+    int nout, sent;
+    uint64_t at;       // cycle the next byte of the reply comes in, or ~0
+    uint64_t complete; // cycles between ACK and COMPLETE
+    // An SIOV call to an ATX disk takes the time the drive would: SIOV
+    // waits, interrupts still taken, until `ready`, then returns `status`
+    // and `len` bytes of `buf`.
+    bool busy;
+    uint64_t ready;
+    uint8_t status;
+    uint8_t buf[256];
+    int len;
+} Sio;
+
+// A record on a tape: its bytes, the gap of silence before it and the
+// rate it was recorded at.
+typedef struct TapeRecord {
+    size_t offset;
+    int length;
+    int gap_ms;
+    int baud;
+} TapeRecord;
+
+// The cassette recorder, playing the records of a .cas file. While the
+// motor runs (PIA CA2 low), each byte reaches POKEY's serial input as it
+// would from the tape, after its record's gap.
+typedef struct Tape {
+    uint8_t *data;        // the file, or NULL for no tape
+    size_t size;
+    TapeRecord *records;
+    int nrecords;
+    int record, pos;      // the next byte: its record and offset in it
+    bool motor;
+    uint64_t start, at;   // cycles the next byte starts and has come in, or ~0
+} Tape;
+
+// A file open on C: through CIO, and the record it is reading.
+typedef struct CasFile {
+    int iocb;             // the IOCB it is open on, or -1
+    bool eof;
+    uint8_t data[128];
+    int len, pos;
+} CasFile;
 
 typedef struct Machine {
     Cpu cpu;
@@ -132,6 +229,20 @@ typedef struct Machine {
     uint8_t cart_bank;     // the bank register, $D500
     bool rd5;              // the cartridge shows at $A000-$BFFF
 
+    uint8_t *xex;
+    size_t xex_size, xex_offset;
+    bool xex_loading;
+    uint16_t xex_resume_pc;
+    uint8_t xex_resume_s;
+
+    Disk disk[DRIVES];
+    Sio sio;
+    uint64_t disk_used[DRIVES + 1];  // cycle of each drive's and the tape's last work, 0 for never
+    Tape tape;
+    CasFile cas;
+    bool builtin_os;       // the built-in OS, which has no CIO of its own
+    int hold_start;        // frames START stays held for a cassette boot
+
     Antic antic;
     Gtia gtia;
     Pokey pokey;
@@ -158,6 +269,39 @@ void machine_set_basic(Machine *m, const uint8_t *basic, size_t size);
 // MegaCart or SIC! cartridge. Returns an error message, or NULL.
 const char *machine_load_cart(Machine *m, const uint8_t *data, size_t size);
 void machine_eject_cart(Machine *m);
+// Opens a cartridge, .xex, .atr, .atx or .cas by filename and power cycles on
+// success. A disk opened while a disk is in D1 replaces it there, and a
+// .cas while a tape is in replaces that, without a reset. Writes to a disk go to the file at `path` (or stay in memory when
+// it is NULL), unless its header marks it write protected or the file
+// cannot be written.
+const char *machine_load_file(Machine *m, const char *path, const uint8_t *data, size_t size);
+// Removes everything, inserts `n` .atr or .atx images into D1 onwards and power
+// cycles. Leaves the machine as it was on failure.
+const char *machine_load_disks(Machine *m, int n, const char *const paths[], const uint8_t *const data[],
+                               const size_t sizes[]);
+void machine_eject_file(Machine *m);
+// Answers a call to SIOV for a disk drive or the cassette, at an
+// instruction boundary: SIO_DONE when it has returned, SIO_WAIT while a
+// drive is still at work (the CPU idles a cycle), SIO_NOT_MINE to run the
+// code there.
+enum { SIO_NOT_MINE, SIO_DONE, SIO_WAIT };
+int machine_sio(Machine *m);
+// Answers a call to CIOV of the built-in OS for C:, at an instruction
+// boundary. Other devices are not there.
+bool machine_cio(Machine *m);
+// The serial bus: POKEY sends a byte, and takes the next byte of a reply
+// or of the tape when `pokey.serin_at` comes (which this schedules).
+void machine_serout(Machine *m, uint8_t v);
+uint8_t machine_serin(Machine *m);
+// The level of the serial input line, as SKSTAT shows it: the tape's bits
+// as they play, high when idle.
+bool machine_serial_line(const Machine *m);
+// The drives at work in the last eighth of a second, a bit for each of
+// D1-D4 and bit 4 for the cassette: what their busy lights show. An SIOV
+// call takes no time, so the light stays on a little after it.
+unsigned machine_disk_activity(const Machine *m);
+// At an instruction boundary, starts the loader or resumes it after INITAD.
+bool machine_step_xex(Machine *m);
 void machine_cold_reset(Machine *m);
 void machine_warm_reset(Machine *m);
 // Runs until the beam reaches line 248, where vertical blank begins and
