@@ -733,8 +733,8 @@ enum {
     IOCB = 0x0340, ICHID = 0, ICDNO, ICCOM, ICSTA, ICBAL, ICBAH, ICPTL, ICPTH, ICBLL, ICBLH, ICAX1, ICAX2,
 };
 enum {
-    CIO_OK = 0x01, CIO_TRUNCATED = 0x89, CIO_EOF = 0x88, CIO_BAD_IOCB = 0x86, CIO_NOT_OPEN = 0x85,
-    CIO_BAD_COMMAND = 0x84, CIO_OPEN = 0x81, CIO_NO_DEVICE = 0x82, CIO_READ_ONLY = 0x87,
+    CIO_OK = 0x01, CIO_TRUNCATED = 0x89, CIO_EOF = 0x88, CIO_BAD_COMMAND = 0x84, CIO_OPEN = 0x81,
+    CIO_READ_ONLY = 0x87,
 };
 
 // The next byte of the file on C:. Records hold 128 bytes ($FC), fewer
@@ -773,25 +773,24 @@ static void tape_find_leader(Tape *t) {
     while (t->record > 0 && t->record < t->nrecords && t->records[t->record].gap_ms < TAPE_LEADER_MS) t->record++;
 }
 
-// CIOV takes the request from the IOCB that X points at and returns with
-// the status in Y and the IOCB, N set on an error, and a byte read in A.
-// C: opens for reading only, at the start of the next file on the tape
-// and without the beep and key press of the Atari OS.
+// The cassette's requests to CIOV, from the IOCB that X points at: an OPEN
+// of C: with a tape in, and the IOCB it opened. They return with the
+// status in Y and the IOCB, N set on an error, and a byte read in A. The
+// OS's CIO takes the rest, through HATABS. C: opens for reading only, at
+// the start of the next file on the tape and without the beep and key
+// press of the Atari OS.
 bool machine_cio(Machine *m) {
     if (!m->builtin_os || !in_os(m, CIOV)) return false;
     Cpu *c = &m->cpu;
+    if ((c->x & 0x0F) || c->x >= 0x80) return false;
     uint8_t status = CIO_OK;
     CasFile *f = &m->cas;
     uint16_t io = IOCB + c->x;
     uint8_t *b = m->ram + io;
     int iocb = c->x >> 4;
-    if ((c->x & 0x0F) || c->x >= 0x80) {
-        status = CIO_BAD_IOCB;
-    } else if (b[ICCOM] == 3) {
-        // OPEN: the device is the first letter of the name.
-        uint8_t dev = sio_peek(m, word(b + ICBAL));
-        if (f->iocb == iocb) status = CIO_OPEN;
-        else if (dev != 'C' || !m->tape.data) status = CIO_NO_DEVICE;
+    if (f->iocb != iocb && (b[ICCOM] != 3 || sio_peek(m, word(b + ICBAL)) != 'C' || !m->tape.data)) return false;
+    if (b[ICCOM] == 3) {
+        if (f->iocb == iocb || b[ICHID] != 0xFF) status = CIO_OPEN;
         else if (b[ICAX1] & 0x08) status = CIO_READ_ONLY;
         else if (f->iocb >= 0) status = CIO_OPEN;
         else {
@@ -803,8 +802,6 @@ bool machine_cio(Machine *m) {
             b[ICHID] = 0;
             b[ICDNO] = 1;
         }
-    } else if (f->iocb != iocb) {
-        status = b[ICCOM] == 12 ? CIO_OK : CIO_NOT_OPEN;
     } else if (b[ICCOM] == 12) {
         // CLOSE
         f->iocb = -1;
@@ -835,7 +832,7 @@ bool machine_cio(Machine *m) {
     } else {
         status = CIO_BAD_COMMAND;
     }
-    if (!((c->x & 0x0F) || c->x >= 0x80)) b[ICSTA] = status;
+    b[ICSTA] = status;
     trap_return(m, status);
     return true;
 }

@@ -79,6 +79,9 @@ $(BUILD)/castest: tools/castest.c $(CORE_OBJS)
 $(BUILD)/atxtest: tools/atxtest.c $(CORE_OBJS)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(BUILD)/ciotest: tools/ciotest.c $(CORE_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@
+
 tools: $(BUILD)/sallyrun $(BUILD)/cputest
 
 # Klaus Dormann's 6502 functional test, downloaded on first use.
@@ -86,12 +89,13 @@ KLAUS = $(BUILD)/6502_functional_test.bin
 $(KLAUS): | $(BUILD)
 	curl -sSfL -o $@ https://raw.githubusercontent.com/Klaus2m5/6502_65C02_functional_tests/master/bin_files/6502_functional_test.bin
 
-test: $(BUILD)/cputest $(BUILD)/xextest $(BUILD)/atrtest $(BUILD)/atxtest $(BUILD)/castest $(KLAUS)
+test: $(BUILD)/cputest $(BUILD)/xextest $(BUILD)/atrtest $(BUILD)/atxtest $(BUILD)/castest $(BUILD)/ciotest $(KLAUS)
 	$(BUILD)/cputest $(KLAUS)
 	$(BUILD)/xextest
 	$(BUILD)/atrtest
 	$(BUILD)/atxtest
 	$(BUILD)/castest
+	$(BUILD)/ciotest
 
 # Runs the build directly: `open` would register build/Sally.app with
 # Launch Services next to the installed copy.

@@ -119,16 +119,19 @@ That covers cartridges and XEX programs that drive the hardware themselves.
 With a disk in D1 it boots from it as the Atari OS does, and DSKINV and
 SIOV reach the drives, which the machine answers directly. With START
 held at power on it boots from the cassette, through SIOV too, and CIO
-opens the cassette as `C:` for reading, also answered by the machine;
-CIO has no other devices. SIOV leaves STATUS and CHKSUM on page zero as
+opens the cassette as `C:` for reading, also answered by the machine.
+Otherwise CIO goes through the handler table HATABS as on the Atari OS,
+with no handlers of its own, so a DOS on the disk adds `D:` and programs
+load their files through it. SIOV leaves STATUS and CHKSUM on page zero as
 SIO does, and WARMSV warm starts, calling CASINI or DOSINI and going on
 through DOSVEC, as loaders that hand over that way expect. Programs with
 their own serial routines reach the same drives over an emulated serial
 bus: command frames through POKEY's serial output under the command line,
 replies through serial input and its interrupt. Boot disks of games work,
-copy protected ones too as ATX images; Atari DOS does not, since there is
-no screen editor or disk handler. Some XEX programs require DOS or
-additional OS services.
+copy protected ones too as ATX images, and so do DOS 2 disks that start a
+program from `AUTORUN.SYS`; DOS's own menu (DUP) does not, since there is
+no screen editor (`E:`). Some XEX programs require DOS or additional OS
+services.
 
 ## Controls
 
@@ -319,7 +322,8 @@ frames emulated, missed refreshes, time per update and audio buffer level.
 
 ## Not done yet
 
-CIO devices other than `C:` (and DOS), turbo tapes and writing to tape, bank-switched cartridges
+The OS's own CIO devices other than `C:` (`E:`, `K:`, `S:` and `P:`, so
+DOS's menu), turbo tapes and writing to tape, bank-switched cartridges
 other than MegaCart and SIC! (and flash writes on those), paddles, a way
 to load the BASIC ROM, and the finer GTIA quirks (player retriggering when
 HPOS changes mid-object). Only NTSC is emulated.
