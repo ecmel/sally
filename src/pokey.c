@@ -140,9 +140,11 @@ void pokey_sync(Machine *m) {
                 if (p->next[ch] == te) underflow(m, ch, te);
         if (p->serout_at == te) {
             // The byte is out: ready for the next, and the shift register
-            // is empty.
+            // is empty. Bit 3 is not latched: it shows that the output is
+            // idle whatever IRQEN says, and loaders poll it.
             p->serout_at = ~(uint64_t)0;
-            p->irqst &= ~(p->irqen & 0x18);
+            p->irqst &= ~(p->irqen & 0x10);
+            p->irqst &= ~0x08;
         }
         if (p->serin_at == te) {
             // A byte has come in.
@@ -164,7 +166,7 @@ void pokey_reset(Machine *m) {
     double cps = p->cps;
     memset(p, 0, sizeof *p);
     p->cps = cps;
-    p->irqst = 0xFF;
+    p->irqst = 0xF7;  // no interrupts; the serial output is idle
     p->t = m->clock;
     p->sample_next = (double)m->clock + cps;
     p->serout_at = ~(uint64_t)0;
@@ -214,11 +216,12 @@ void pokey_write(Machine *m, uint8_t reg, uint8_t v) {
     case 0x09: restart_counters(m); break;  // STIMER
     case 0x0D:                              // SEROUT: ten bits at the channel 4 rate
         p->serout_at = m->clock + 20 * period(p, 3);
+        p->irqst |= 0x08;
         machine_serout(m, v);
         break;
     case 0x0E:
         p->irqen = v;
-        p->irqst |= ~v;
+        p->irqst |= ~v & ~0x08;
         break;
     case 0x0F: {
         bool was = running(p);
